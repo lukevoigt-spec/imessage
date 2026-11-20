@@ -1,0 +1,32 @@
+# Message data must never be committed. The tool stores it in ~/.imessage-explorer,
+# outside this folder; these rules are a second line of defence.
+*.db
+*.db-wal
+*.db-shm
+*.abcddb
+*.sqlite
+*.sqlite3
+chat.db*
+contacts.csv
+topics.json
+activity.jsonl
+*.csv
+# Folders of generated or personal data at the top of the project only.
+# (Anchored with a leading slash so they never hide the tool's own imx/data folder.)
+/demo/
+/fixture/
+/data/
+
+# Secrets
+.env
+.env.*
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
