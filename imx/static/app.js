@@ -1925,7 +1925,7 @@ function swatches(entries) {
   return h("div", { class: "legend" }, entries.map(([cls, label]) => h("span", {}, h("i", { class: "swatch " + cls }), label)));
 }
 
-/* Share of messages by how the conversation felt, one row each, lined up on the middle of "neutral". */
+/* Share of messages by how the conversation felt, one row each, lined up on the middle of the grey part (mixed and neutral together). */
 function feelBars(rows, labelOf) {
   const cold = ["hostile", "tense", "cool"], middle = ["mixed", "neutral"], warmSide = ["friendly", "warm"];
   const shaped = rows.map((row) => {
@@ -1945,7 +1945,7 @@ function feelBars(rows, labelOf) {
         segment.style.width = (100 * s.row[key] / s.total / span) + "%";
         track.append(hoverTip(segment, labelOf(s.row) + ": " + FEEL_NAMES[key].toLowerCase() + " for " + Math.round(100 * s.row[key] / s.total) + "% of messages (" + fmt(s.row[key]) + ")"));
       }
-      const centre = h("div", { class: "feel-centre" });       // where the middle of "neutral" falls, the same on every row
+      const centre = h("div", { class: "feel-centre" });       // where the middle of the grey part falls, the same on every row
       centre.style.left = (100 * maxLeft / span) + "%";
       return h("div", { class: "feel-row" }, h("div", { class: "feel-label", text: labelOf(s.row) }), h("div", { class: "feel-wrap" }, track, centre),
         h("div", { class: "val", text: Math.round(100 * (s.row.warm + s.row.friendly) / s.total) + "% warm" }));
@@ -1998,7 +1998,7 @@ async function renderMeCharts() {
     h("div", { class: "panel" }, h("h2", { text: "Over time" }), definition(d.definition),
       h("div", { class: "row" }, h("label", {}, "Show ", who), h("span", { class: "small muted", text: fmt(d.digests) + " digests counted. No cost: nothing is sent anywhere." }))),
     h("div", { class: "panel" }, h("h3", { text: "How your conversations felt, year by year, " + scope }),
-      h("p", { class: "small muted", text: "Share of messages in stretches the model read as cold (left) or warm (right). The rows line up on the middle of neutral." }),
+      h("p", { class: "small muted", text: "Share of messages in stretches the model read as cold (left) or warm (right). Mixed and neutral sit in the middle, in grey, and the rows line up on the centre of that grey part, marked by the thin line." }),
       feelBars(d.feel_by_year, (row) => row.year)),
     h("div", { class: "panel" }, h("h3", { text: "Friction, and how it ended, " + scope }),
       d.friction_by_year.some((row) => d.resolutions.some((key) => row[key]))
