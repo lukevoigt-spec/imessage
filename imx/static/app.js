@@ -61,19 +61,27 @@ function when(ts) {
   return new Date(ts * 1000).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/* Counts every change of screen. A screen that is still loading when you move on must not
+ * come back and draw over the screen you moved to, so a reply that arrives after the count
+ * has changed is quietly dropped. Actions (saving, sending) are never dropped. */
+let navigation = 0;
+
 async function request(path, options) {
-  const response = await fetch(path, Object.assign({ headers: { "X-IMX-Token": TOKEN, "Content-Type": "application/json" } }, options));
+  const opts = options || {};
+  const asked = navigation;
+  const response = await fetch(path, Object.assign({ headers: { "X-IMX-Token": TOKEN, "Content-Type": "application/json" } }, { method: opts.method, body: opts.body }));
   let data = {};
   try { data = await response.json(); } catch (e) { /* non-JSON error body */ }
+  if (!opts.method && !opts.always && asked !== navigation) return new Promise(() => {});   // you have moved on: abandon this screen
   if (!response.ok) throw new Error(data.error || "Request failed (" + response.status + ").");
   return data;
 }
 function get(path, params) {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(Object.assign({}, state.filters, params || {}))) {
-    if (value !== "" && value !== null && value !== undefined) query.set(key, value);
+    if (key !== "_always" && value !== "" && value !== null && value !== undefined) query.set(key, value);
   }
-  return request(path + "?" + query.toString());
+  return request(path + "?" + query.toString(), params && params._always ? { always: true } : undefined);
 }
 const post = (path, body) => request(path, { method: "POST", body: JSON.stringify(body) });
 
@@ -580,6 +588,7 @@ function setTab(name) {
     return pill;
   }) : []));
   document.getElementById("filters").hidden = UNFILTERED.has(name);
+  navigation += 1;
   Promise.resolve(SCREENS[name]()).catch(failure);
 }
 
@@ -591,10 +600,11 @@ function syncFilterInputs() {
 function setFilter(key, value) { state.filters[key] = value; state.search.offset = 0; syncFilterInputs(); setTab(state.tab); }
 
 async function loadShell() {
-  state.meta = await get("/api/meta", {});
+  // The header and the name list belong to no one screen, so these replies are always used.
+  state.meta = await get("/api/meta", { _always: true });
   const t = state.meta.totals;
   document.getElementById("summary").textContent = fmt(t.messages) + " messages with " + fmt(t.people) + " people and " + fmt(t.groups) + " groups, " + t.first_day + " to " + t.last_day + ".";
-  const contacts = await get("/api/contacts", {});
+  const contacts = await get("/api/contacts", { _always: true });
   document.getElementById("contact-list").replaceChildren(...contacts.contacts.map((c) => h("option", { value: c.name })));
 }
 
@@ -633,7 +643,7 @@ async function start() {
   document.getElementById("update").addEventListener("click", runUpdate);
   document.getElementById("filters").hidden = true;
   try {
-    const status = await request("/api/status");
+    const status = await request("/api/status", { always: true });
     if (!status.ready || !status.current) {
       document.getElementById("summary").textContent = "";
       show(h("div", { class: "panel start-here" },
@@ -645,7 +655,7 @@ async function start() {
       return;
     }
     await loadShell();
-    setTab("home");
+    if (navigation === 0) setTab("home");      // unless you have already gone somewhere while it was loading
   } catch (error) {
     document.getElementById("summary").textContent = "";
     failure(error);
