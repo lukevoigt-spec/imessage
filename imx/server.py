@@ -250,6 +250,7 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/reading/plan": lambda conn, p: _reading_plan(conn, p),
     "/api/reading/status": lambda conn, p: reading.status(),
     "/api/reading/results": lambda conn, p: reading.results(conn),
+    "/api/reading/report": lambda conn, p: reading.pilot_report(conn),
     "/api/reading/queue": lambda conn, p: reading.review_queue(),
     "/api/reading/unit": lambda conn, p: reading.unit_for_review(conn, p.get("id", "")),
 }

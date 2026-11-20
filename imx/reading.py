@@ -28,9 +28,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import queue
 import sqlite3
+import statistics
+import sys
 import threading
+import time
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
@@ -145,7 +149,27 @@ CREATE TABLE IF NOT EXISTS ledger (
     messages INTEGER NOT NULL,
     input_tokens INTEGER NOT NULL,
     output_tokens INTEGER NOT NULL,
-    cost_usd REAL NOT NULL
+    cost_usd REAL NOT NULL,
+    seconds REAL NOT NULL DEFAULT 0,        -- how long the request took, waits included
+    waits INTEGER NOT NULL DEFAULT 0,       -- how many times Anthropic said "slow down" or "busy" first
+    wait_seconds REAL NOT NULL DEFAULT 0,   -- time spent waiting because of that
+    characters INTEGER NOT NULL DEFAULT 0   -- size of the conversation sent
+);
+-- Requests that never produced a reply, so cost nothing. Holds Anthropic's error wording, never message text.
+CREATE TABLE IF NOT EXISTS failure (
+    at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    problem TEXT NOT NULL
+);
+-- One row per press of the send button.
+CREATE TABLE IF NOT EXISTS run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    seconds REAL,
+    requests_planned INTEGER NOT NULL,
+    ended TEXT                              -- 'finished', 'stopped by you' or 'stopped at the cap'
 );
 CREATE TABLE IF NOT EXISTS review (
     unit_id TEXT NOT NULL,
@@ -164,6 +188,11 @@ def _store() -> sqlite3.Connection:
     path = paths.data_dir() / "reading.db"
     conn = sqlite3.connect(str(path), timeout=60)
     conn.executescript(STORE_SCHEMA)
+    # Columns added after the first version of the pilot.
+    have = {row[1] for row in conn.execute("PRAGMA table_info(ledger)")}
+    for name, kind in (("seconds", "REAL"), ("waits", "INTEGER"), ("wait_seconds", "REAL"), ("characters", "INTEGER")):
+        if name not in have:
+            conn.execute("ALTER TABLE ledger ADD COLUMN %s %s NOT NULL DEFAULT 0" % (name, kind))
     try:
         path.chmod(0o600)
     except OSError:
@@ -174,6 +203,18 @@ def _store() -> sqlite3.Connection:
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _write(sql: str, values: tuple) -> int:
+    """Run one change against reading.db and return the new row's id."""
+    with _store_lock:
+        conn = _store()
+        try:
+            cursor = conn.execute(sql, values)
+            conn.commit()
+            return cursor.lastrowid or 0
+        finally:
+            conn.close()
 
 
 def spent() -> float:
@@ -372,8 +413,12 @@ def _parse_digest(text: str) -> Optional[dict]:
 def read_unit(unit: Dict[str, object], model: str, send: Callable = claude_api.send_patiently,
               keep_going: Callable[[], bool] = lambda: True) -> str:
     """Send one unit to one model and store what comes back. Returns 'ok', 'declined' or 'unreadable'."""
+    waited: List[float] = []
+    began = time.time()
     reply = send(model, SYSTEM_PROMPT, _request_text(unit), schema=DIGEST_SCHEMA, effort=EFFORT,
-                 max_tokens=MAX_OUTPUT_TOKENS, keep_going=keep_going, attempts=PATIENCE)
+                 max_tokens=MAX_OUTPUT_TOKENS, keep_going=keep_going, attempts=PATIENCE,
+                 on_wait=lambda seconds, _status: waited.append(seconds))
+    took = time.time() - began
     digest = None if reply["stop_reason"] == "refusal" else _parse_digest(str(reply["text"]))
     outcome = "declined" if reply["stop_reason"] == "refusal" else ("ok" if digest is not None else "unreadable")
     with _store_lock:
@@ -381,10 +426,11 @@ def read_unit(unit: Dict[str, object], model: str, send: Callable = claude_api.s
         try:
             conn.execute("INSERT OR REPLACE INTO unit VALUES (?, ?, ?, ?, ?, ?)",
                          (unit["id"], unit["counterpart"], unit["first_ts"], unit["last_ts"], unit["messages"], unit["characters"]))
-            conn.execute("INSERT INTO ledger (at, model, unit_id, messages, input_tokens, output_tokens, cost_usd) "
-                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            conn.execute("INSERT INTO ledger (at, model, unit_id, messages, input_tokens, output_tokens, cost_usd, "
+                         "seconds, waits, wait_seconds, characters) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                          (_now(), model, unit["id"], unit["messages"], reply["usage"]["input_tokens"],
-                          reply["usage"]["output_tokens"], reply["cost_usd"]))
+                          reply["usage"]["output_tokens"], reply["cost_usd"], round(took, 2), len(waited),
+                          round(sum(waited), 1), unit["characters"]))
             conn.execute("INSERT OR REPLACE INTO digest VALUES (?, ?, ?, ?, ?)",
                          (unit["id"], model, outcome, json.dumps(digest, ensure_ascii=False) if digest else "", _now()))
             conn.commit()
@@ -417,7 +463,10 @@ class Job:
         self.threads = [threading.Thread(target=self._work, args=(model,), daemon=True)
                         for model in MODELS for _ in range(WORKERS_PER_MODEL)]
         self.started_at = _now()
+        self.began = time.time()
         self.finished_at: Optional[str] = None
+        self.run_id = _write("INSERT INTO run (started_at, requests_planned) VALUES (?, ?)",
+                             (self.started_at, sum(p["total"] for p in self.progress.values())))
 
     def start(self) -> None:
         for thread in self.threads:
@@ -427,7 +476,13 @@ class Job:
     def _finish(self) -> None:
         for thread in self.threads:
             thread.join()
-        self.finished_at = _now()
+        ended = "stopped at the cap" if self.capped else "stopped by you" if self.stop_requested else "finished"
+        try:
+            _write("UPDATE run SET finished_at = ?, seconds = ?, ended = ? WHERE id = ?",
+                   (_now(), round(time.time() - self.began, 1), ended, self.run_id))
+        except sqlite3.Error:
+            pass                              # the record of the run is a convenience; never let it break the run
+        self.finished_at = _now()             # set last: "not running" means everything has been written down
 
     def running(self) -> bool:
         return self.finished_at is None
@@ -463,6 +518,7 @@ class Job:
                 with self.lock:
                     self.progress[model]["failed"] += 1
                 self._problem("%s: %s" % (claude_api.MODEL_NAMES[model], exc))
+                _write("INSERT INTO failure VALUES (?, ?, ?, ?)", (_now(), model, exc.status, str(exc)[:300]))
                 if exc.status in (401, 402, 403):
                     self.stop_requested = True           # the key itself is the problem: stop everything
                     return
@@ -472,6 +528,7 @@ class Job:
                 with self.lock:
                     self.progress[model]["failed"] += 1
                 self._problem("%s: unexpected problem (%s)" % (claude_api.MODEL_NAMES[model], exc))
+                _write("INSERT INTO failure VALUES (?, ?, ?, ?)", (_now(), model, 0, ("unexpected: %s" % exc)[:300]))
             finally:
                 with self.lock:
                     self.reserved -= worst
@@ -574,6 +631,116 @@ def results(conn: sqlite3.Connection) -> Dict[str, object]:
                        "the people in this pilot. Batch is the half-price overnight rate the full read would use."),
     }
 
+
+
+# ---- the pilot report: everything needed to plan the full read, with no names and no message text ----
+
+def _middle(values: List[float]) -> float:
+    return round(statistics.median(values), 1) if values else 0.0
+
+
+def _ninth_decile(values: List[float]) -> float:
+    """The value 90% of requests came in under."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return round(ordered[min(len(ordered) - 1, int(len(ordered) * 0.9))], 1)
+
+
+def pilot_report(conn: sqlite3.Connection) -> Dict[str, object]:
+    """Numbers only: cost, tokens, speed, waits, failures and your marks. Safe to paste to whoever maintains the tool."""
+    from . import __version__
+    found = results(conn)
+    history = conn.execute(
+        "SELECT COUNT(*), SUM(junk), SUM(CASE WHEN is_group = 1 THEN 1 ELSE 0 END), COUNT(DISTINCT counterpart), MIN(day), MAX(day) "
+        "FROM messages WHERE NOT (kind = 'reaction' AND react_type >= 3000)").fetchone()
+    with _store_lock:
+        store = _store()
+        try:
+            runs = [dict(row) for row in store.execute("SELECT started_at, finished_at, seconds, requests_planned, ended FROM run ORDER BY id")]
+            timings = {model: store.execute("SELECT seconds, waits, wait_seconds, messages, characters, input_tokens, output_tokens "
+                                            "FROM ledger WHERE model = ?", (model,)).fetchall() for model in MODELS}
+            failures = [dict(row) for row in store.execute(
+                "SELECT model, status, problem, COUNT(*) AS times FROM failure GROUP BY model, status, problem ORDER BY times DESC LIMIT 20")]
+            unit_sizes = [row[0] for row in store.execute("SELECT messages FROM unit")]
+        finally:
+            store.close()
+    models = []
+    for row in found["models"]:
+        rows = timings[row["model"]]
+        seconds = [r["seconds"] for r in rows if r["seconds"]]
+        models.append(dict(row,
+                           requests=len(rows),
+                           seconds_median=_middle(seconds), seconds_90pct=_ninth_decile(seconds),
+                           times_told_to_wait=sum(r["waits"] for r in rows),
+                           seconds_spent_waiting=round(sum(r["wait_seconds"] for r in rows), 1),
+                           input_tokens_per_message=round(sum(r["input_tokens"] for r in rows) / max(1, sum(r["messages"] for r in rows)), 1),
+                           output_tokens_per_request=round(sum(r["output_tokens"] for r in rows) / max(1, len(rows)), 1),
+                           characters_per_input_token=round(sum(r["characters"] for r in rows) / max(1, sum(r["input_tokens"] for r in rows)), 2)))
+    data = {
+        "app_version": __version__,
+        "python": sys.version.split()[0],
+        "macos": platform.mac_ver()[0] or platform.system(),
+        "history": {"messages": history[0], "automated_hidden": history[1] or 0, "in_group_chats": history[2] or 0,
+                    "conversations": history[3], "first_day": history[4], "last_day": history[5],
+                    "messages_a_full_read_would_cover": found["messages_in_history"]},
+        "settings": {"effort": EFFORT, "max_output_tokens": MAX_OUTPUT_TOKENS, "workers_per_model": WORKERS_PER_MODEL,
+                     "target_messages_per_unit": TARGET_MESSAGES, "max_messages_per_unit": MAX_MESSAGES},
+        "units_read": len(unit_sizes), "messages_per_unit_median": _middle(unit_sizes),
+        "messages_per_unit_largest": max(unit_sizes) if unit_sizes else 0,
+        "runs": runs,
+        "models": models,
+        "failures": failures,
+        "spent_usd": found["spent_usd"], "cap_usd": found["cap_usd"],
+        "conversations_marked": found["units_reviewed"],
+    }
+    data["text"] = _report_text(data)
+    return data
+
+
+def _report_text(d: Dict[str, object]) -> str:
+    h = d["history"]
+    lines = [
+        "iMessage Explorer pilot report (numbers only: no names, no message text)",
+        "App %s, Python %s, macOS %s" % (d["app_version"], d["python"], d["macos"]),
+        "",
+        "History: %s messages in %s conversations, %s to %s. %s hidden as automated, %s in group chats. "
+        "A full read would cover %s." % (format(h["messages"], ","), format(h["conversations"], ","), h["first_day"], h["last_day"],
+                                         format(h["automated_hidden"], ","), format(h["in_group_chats"], ","),
+                                         format(h["messages_a_full_read_would_cover"], ",")),
+        "Settings: effort %s, max output %s tokens, %s workers per model, units aim for %s and stop at %s messages."
+        % tuple(d["settings"][k] for k in ("effort", "max_output_tokens", "workers_per_model", "target_messages_per_unit", "max_messages_per_unit")),
+        "Units read: %s. Messages per unit: median %s, largest %s." % (d["units_read"], d["messages_per_unit_median"], d["messages_per_unit_largest"]),
+        "Spent $%.4f of the $%.2f cap. Conversations marked: %s." % (d["spent_usd"], d["cap_usd"], d["conversations_marked"]),
+        "",
+        "Runs:",
+    ]
+    for run in d["runs"] or []:
+        lines.append("  %s to %s, %s s, %s requests planned, %s" % (run["started_at"], run["finished_at"] or "not finished",
+                                                                    run["seconds"] if run["seconds"] is not None else "?",
+                                                                    run["requests_planned"], run["ended"] or "interrupted"))
+    if not d["runs"]:
+        lines.append("  none yet")
+    for m in d["models"]:
+        lines += [
+            "",
+            "%s" % m["name"],
+            "  requests %s: %s digests, %s declined, %s unreadable" % (m["requests"], m["digests"], m["declined"], m["unreadable"]),
+            "  messages read %s, input tokens %s, output tokens %s" % (format(m["messages_read"], ","), format(m["input_tokens"], ","), format(m["output_tokens"], ",")),
+            "  per message: %s input tokens. per request: %s output tokens. %s characters per input token."
+            % (m["input_tokens_per_message"], m["output_tokens_per_request"], m["characters_per_input_token"]),
+            "  spent $%.4f, $%s per 1,000 messages, whole history $%s standard or $%s batch"
+            % (m["spent_usd"], m["usd_per_thousand_messages"], m["whole_history_usd"], m["whole_history_batch_usd"]),
+            "  seconds per request: median %s, 90%% under %s. told to wait %s times, %s s spent waiting"
+            % (m["seconds_median"], m["seconds_90pct"], m["times_told_to_wait"], m["seconds_spent_waiting"]),
+            "  your marks: %s right, %s missing something, %s wrong (of %s marked)" % (m["right"], m["missing"], m["wrong"], m["reviewed"]),
+        ]
+    lines += ["", "Failures (cost nothing):"]
+    for f in d["failures"] or []:
+        lines.append("  %s x %s, status %s: %s" % (f["times"], claude_api.MODEL_NAMES.get(f["model"], f["model"]), f["status"], f["problem"]))
+    if not d["failures"]:
+        lines.append("  none")
+    return "\n".join(lines)
 
 # ---- review: marking digests without knowing which model wrote them --------------------------------------
 

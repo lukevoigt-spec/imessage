@@ -1174,7 +1174,30 @@ function pilotResults(found) {
         h("td", { class: "n", text: usd(m.usd_per_thousand_messages) }), h("td", { class: "n", text: usd(m.whole_history_usd) }),
         h("td", { class: "n", text: usd(m.whole_history_batch_usd) }),
         h("td", { class: "n", text: fmt(m.right) }), h("td", { class: "n", text: fmt(m.missing) }), h("td", { class: "n", text: fmt(m.wrong) })))))),
-    h("p", { class: "small muted", text: "Right, missing and wrong are your own marks from the Review screen. Whole history covers all " + fmt(found.messages_in_history) + " of your messages." }));
+    h("p", { class: "small muted", text: "Right, missing and wrong are your own marks from the Review screen. Whole history covers the " + fmt(found.messages_in_history) + " messages left after automated senders are set aside." }),
+    reportBox());
+}
+
+/* A numbers-only summary to paste to whoever maintains the tool: cost, tokens, speed, waits, failures and marks. */
+function reportBox() {
+  const out = h("div", {});
+  const make = async () => {
+    try {
+      const report = await request("/api/reading/report");
+      const box = h("textarea", { class: "report-text", readonly: true, rows: "16", "aria-label": "Pilot report" });
+      box.value = report.text;
+      const status = h("span", { class: "small muted" });
+      const copy = async () => {
+        try { await navigator.clipboard.writeText(report.text); status.textContent = "Copied. Paste it into your conversation with Claude."; }
+        catch (error) { box.select(); status.textContent = "Select all of the text above and copy it."; }
+      };
+      out.replaceChildren(box, h("div", { class: "row" }, h("button", { class: "primary", text: "Copy", onclick: copy }), status));
+    } catch (error) { out.replaceChildren(h("p", { class: "error", text: error.message })); }
+  };
+  return h("div", {}, h("div", { class: "spacer" }),
+    h("div", { class: "row" }, h("button", { text: "Make the pilot report", onclick: make }),
+      h("span", { class: "small muted", text: "Numbers only: cost, tokens, speed, waits, failures and your marks. No names and no message text." })),
+    out);
 }
 
 function pilotProgress(st) {

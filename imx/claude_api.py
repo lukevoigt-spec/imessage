@@ -270,8 +270,12 @@ def send(model: str, system: str, user_text: str, schema: Optional[dict] = None,
 
 
 def send_patiently(*args, attempts: int = 6, sleep: Callable[[float], None] = time.sleep,
-                   keep_going: Callable[[], bool] = lambda: True, **kwargs) -> Dict[str, object]:
-    """Like send(), but waits and tries again when Anthropic says it is busy or asks us to slow down."""
+                   keep_going: Callable[[], bool] = lambda: True, on_wait: Optional[Callable[[float, int], None]] = None,
+                   **kwargs) -> Dict[str, object]:
+    """Like send(), but waits and tries again when Anthropic says it is busy or asks us to slow down.
+
+    `on_wait(seconds, status)` is told about each wait, so the time lost to waiting can be recorded.
+    """
     wait = 2.0
     for attempt in range(attempts):
         try:
@@ -281,6 +285,8 @@ def send_patiently(*args, attempts: int = 6, sleep: Callable[[float], None] = ti
                 raise
             pause = min(exc.retry_after if exc.retry_after is not None else wait, 90.0)
             wait = min(wait * 2, 60.0)
+            if on_wait is not None:
+                on_wait(pause, exc.status)
             sleep(pause)
     raise AIError("Anthropic stayed busy. Try again later.", retryable=True)  # not reached; keeps type checkers calm
 

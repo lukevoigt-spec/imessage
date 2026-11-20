@@ -306,9 +306,17 @@ class ReadingTests(unittest.TestCase):
         planned = reading.plan(self.conn, people or ["Avery Stone"], "2025", per_person)
         job = reading.Job(planned["_units"], cap_usd=cap, send=send)
         job.start()
+        self.wait(job)
+        return job
+
+    def wait(self, job):
         for thread in job.threads:
             thread.join(timeout=30)
-        return job
+        for _ in range(600):
+            if not job.running():
+                return
+            time.sleep(0.01)
+        self.fail("the run did not finish")
 
     def test_messages_are_cut_into_units_by_the_stated_rules(self):
         units = reading.units_for(self.conn, "Avery Stone", "2025")
@@ -481,6 +489,43 @@ class ReadingTests(unittest.TestCase):
         with self.assertRaises(QueryError):
             reading.save_review(unit_id, "A", "brilliant")
 
+    def test_every_request_is_timed_and_waits_and_failures_are_written_down(self):
+        def send(model, system, text, on_wait=None, **kwargs):
+            if model == "claude-opus-5-5":
+                raise AIError("Anthropic rejected the request: output_config: nope", status=400)
+            if model == "claude-sonnet-5-5":
+                on_wait(7.0, 429)                     # told to slow down once before each reply
+            time.sleep(0.02)
+            return reply(model=model)
+
+        self.run_job(send)
+        found = reading.pilot_report(self.conn)
+        by_model = {m["model"]: m for m in found["models"]}
+        haiku, sonnet, opus = (by_model[m] for m in reading.MODELS)
+        self.assertEqual((haiku["requests"], sonnet["requests"], opus["requests"]), (5, 5, 0))
+        self.assertGreaterEqual(haiku["seconds_median"], 0.0)
+        self.assertEqual((haiku["times_told_to_wait"], haiku["seconds_spent_waiting"]), (0, 0.0))
+        self.assertEqual((sonnet["times_told_to_wait"], sonnet["seconds_spent_waiting"]), (5, 35.0))
+        # 399 messages read with 5 x 1,000 input tokens and 5 x 200 output tokens.
+        self.assertEqual((haiku["input_tokens_per_message"], haiku["output_tokens_per_request"]), (round(5000 / 399, 1), 200.0))
+        # Each of Opus's workers meets the rejection once and then stops, so it is written down once or twice.
+        self.assertEqual(len(found["failures"]), 1)
+        failure = found["failures"][0]
+        self.assertEqual((failure["model"], failure["status"], failure["problem"]),
+                         ("claude-opus-5-5", 400, "Anthropic rejected the request: output_config: nope"))
+        self.assertIn(failure["times"], range(1, reading.WORKERS_PER_MODEL + 1))
+        self.assertEqual(len(found["runs"]), 1)
+        self.assertEqual((found["runs"][0]["ended"], found["runs"][0]["requests_planned"]), ("finished", 15))
+        self.assertEqual((found["units_read"], found["messages_per_unit_largest"]), (5, 300))
+
+    def test_the_report_holds_numbers_only(self):
+        self.run_job(lambda model, system, text, **k: reply(model=model))
+        text = reading.pilot_report(self.conn)["text"]
+        for private in ("Avery", "Jordan", "Stone", "message 1", "They planned dinner"):
+            self.assertNotIn(private, text)
+        for expected in ("Haiku 5.5", "Opus 5.5", "per 1,000 messages", "seconds per request", "Failures (cost nothing):", "none"):
+            self.assertIn(expected, text)
+
     def test_stop_ends_the_run_early(self):
         started = threading.Event()
 
@@ -494,8 +539,7 @@ class ReadingTests(unittest.TestCase):
         job.start()
         started.wait(5)
         job.stop()
-        for thread in job.threads:
-            thread.join(timeout=10)
+        self.wait(job)
         done = sum(m["ok"] for m in job.status()["models"])
         self.assertLess(done, 15)
         self.assertTrue(job.status()["stopped_by_you"])
