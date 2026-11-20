@@ -309,6 +309,20 @@ def batch_results(batch_id: str, transport: Optional[Transport] = None) -> List[
     return _request("GET", "/v1/messages/batches/%s/results" % batch_id, None, (), transport, lines=True)
 
 
+def batch_list(pages: int = 5, transport: Optional[Transport] = None) -> List[Dict[str, object]]:
+    """The most recent batches Anthropic holds for this key, newest first (up to 100 per page)."""
+    found: List[Dict[str, object]] = []
+    after = ""
+    for _ in range(pages):
+        page = _request("GET", "/v1/messages/batches?limit=100" + ("&after_id=" + after if after else ""), None, (), transport)
+        rows = page.get("data") if isinstance(page.get("data"), list) else []
+        found.extend(row for row in rows if isinstance(row, dict))
+        after = str(page.get("last_id") or "")
+        if not page.get("has_more") or not after:
+            break
+    return found
+
+
 def batch_cancel(batch_id: str, transport: Optional[Transport] = None) -> Dict[str, object]:
     return _request("POST", "/v1/messages/batches/%s/cancel" % batch_id, {}, (), transport)
 

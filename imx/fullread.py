@@ -28,6 +28,10 @@ Safeguards:
   Anthropic had already read is collected and kept, because it was paid for.
 - The people who matter most are read first, so a stop or the cap falls on the
   quietest conversations.
+- Nothing is lost if the app is closed at a bad moment. If Anthropic accepted
+  a batch but the app never heard back (closed, or the connection dropped,
+  mid-upload), the app finds that batch at Anthropic the next time it runs and
+  takes it back, instead of sending the same conversations again.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import activity, claude_api, index, reading
@@ -49,8 +53,8 @@ FULL_CAP_USD = 150.00                  # the most the full read may spend, agree
 DEFAULT_MODEL = "claude-sonnet-5-5"    # reads everything not named below
 CLOSE_MODEL = "claude-opus-5-5"        # reads the people you name
 SAFETY = 2.0                           # waves are sized as if each conversation cost this many times the estimate
-BATCH_REQUESTS = 2000                  # conversations per batch
-BATCH_CHARACTERS = 30_000_000          # and a size limit per batch, well under Anthropic's
+BATCH_REQUESTS = 500                   # conversations per batch
+BATCH_CHARACTERS = 4_000_000           # and a size limit per batch: uploads of a few megabytes, so each takes seconds
 MAX_ATTEMPTS = 2                       # how many times a conversation is sent before it is listed as not read
 POLL_SECONDS = float(os.environ.get("IMX_POLL_SECONDS", "60"))    # how often batches are checked; tests shorten it
 
@@ -286,8 +290,10 @@ def _outstanding() -> float:
             conn.close()
 
 
-def send_wave(conn: sqlite3.Connection, create: Callable = claude_api.batch_create) -> Dict[str, object]:
+def send_wave(conn: sqlite3.Connection, create: Callable = claude_api.batch_create,
+              say: Callable[[str], None] = lambda _text: None) -> Dict[str, object]:
     """Send as many waiting conversations as safely fit under the cap. Returns what was sent."""
+    say("Working out what to send")
     planned = plan(conn)
     pending = planned["_pending"]
     headroom = FULL_CAP_USD - spent() - SAFETY * _outstanding()
@@ -299,6 +305,7 @@ def send_wave(conn: sqlite3.Connection, create: Callable = claude_api.batch_crea
         headroom -= cost
         wave.append(unit)
     sent_units = batches = 0
+    in_wave = len(wave)
     while wave:
         chunk: List[Dict[str, object]] = []
         size = 0
@@ -309,6 +316,7 @@ def send_wave(conn: sqlite3.Connection, create: Callable = claude_api.batch_crea
                      "params": claude_api.message_body(unit["model"], reading.SYSTEM_PROMPT, reading._request_text(unit),
                                                        schema=reading.DIGEST_SCHEMA, effort=reading.EFFORT,
                                                        max_tokens=reading.MAX_OUTPUT_TOKENS)} for unit in chunk]
+        say("Uploading: %s of %s stretches in this wave sent so far" % (format(sent_units, ","), format(in_wave, ",")))
         batch = create(requests)                    # raises AIError if Anthropic will not take it; nothing is recorded then
         batch_id = str(batch.get("id") or "")
         if not batch_id:
@@ -342,8 +350,76 @@ def _problem_text(result: dict) -> str:
     return str(inner.get("message") or inner.get("type") or result.get("type") or "no detail given")[:300]
 
 
-def collect(get: Callable = claude_api.batch_get, results: Callable = claude_api.batch_results) -> Dict[str, int]:
-    """Check every batch still being processed, and store the results of any that have finished."""
+def _epoch(stamp: str) -> float:
+    """Anthropic's timestamp (such as 2026-11-20T09:30:00.123456Z) as seconds since 1970. 0 if unreadable."""
+    try:
+        text = stamp.strip().replace("Z", "+00:00")
+        if "." in text:                                  # Python 3.9 needs at most six digits of fraction
+            head, rest = text.split(".", 1)
+            digits = "".join(itertools.takewhile(str.isdigit, rest))
+            text = head + "." + digits[:6].ljust(6, "0") + rest[len(digits):]
+        return datetime.fromisoformat(text).astimezone(timezone.utc).timestamp()
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def _began() -> float:
+    """When this full read started, as seconds since 1970. 0 if it never has."""
+    try:
+        recorded = float(_setting("started_epoch", "0") or 0)
+    except ValueError:
+        recorded = 0.0
+    if recorded:
+        return recorded
+    # A read started by an earlier version of the app recorded only the local date and time.
+    try:
+        return time.mktime(time.strptime(_setting("started_at"), "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return 0.0
+
+
+def adopt_lost_batches(list_batches: Callable = claude_api.batch_list) -> int:
+    """Find batches Anthropic accepted that this app has no record of, and take them back.
+
+    That happens when the app is closed, or the connection drops, after Anthropic has taken a
+    batch but before the app hears its id. Without this the same conversations would be sent,
+    and paid for, a second time. Returns how many were found.
+    """
+    began = _began()
+    if not began:
+        return 0
+    with reading._store_lock:
+        store = _store()
+        try:
+            known = {row[0] for row in store.execute("SELECT id FROM batch")}
+        finally:
+            store.close()
+    found = 0
+    for batch in list_batches():
+        batch_id = str(batch.get("id") or "")
+        # Only batches made since this full read began: anything older belongs to something else.
+        if not batch_id or batch_id in known or _epoch(str(batch.get("created_at") or "")) < began - 600:
+            continue
+        counts = batch.get("request_counts") if isinstance(batch.get("request_counts"), dict) else {}
+        with reading._store_lock:
+            store = _store()
+            try:
+                store.execute("INSERT OR IGNORE INTO batch (id, created_at, status, requests) VALUES (?, ?, 'in_progress', ?)",
+                              (batch_id, reading._now(), sum(int(counts.get(k) or 0) for k in counts)))
+                store.commit()
+            finally:
+                store.close()
+        found += 1
+    return found
+
+
+def collect(get: Callable = claude_api.batch_get, results: Callable = claude_api.batch_results,
+            lookup: Optional[Callable[[], Dict[str, Dict[str, object]]]] = None) -> Dict[str, int]:
+    """Check every batch still being processed, and store the results of any that have finished.
+
+    `lookup` returns every unit in the history by id. It is used only for a batch the app took back
+    without a record of what was in it.
+    """
     with reading._store_lock:
         store = _store()
         try:
@@ -355,12 +431,36 @@ def collect(get: Callable = claude_api.batch_get, results: Callable = claude_api
         if str(get(batch_id).get("processing_status")) != "ended":
             continue
         lines = results(batch_id)
+        # Looked up before the store is locked: both of these read the store themselves.
+        with reading._store_lock:
+            store = _store()
+            try:
+                recorded = {row[0] for row in store.execute("SELECT unit_id FROM sent WHERE batch_id = ?", (batch_id,))}
+            finally:
+                store.close()
+        strangers = [str(line.get("custom_id") or "") for line in lines if str(line.get("custom_id") or "") not in recorded]
+        everything = lookup() if (strangers and lookup is not None) else {}
+        close = set(close_people()) if strangers else set()
         with reading._store_lock:
             store = _store()
             try:
                 models = {row["unit_id"]: row["model"] for row in store.execute("SELECT unit_id, model FROM sent WHERE batch_id = ?", (batch_id,))}
-                units = {row["id"]: row for row in store.execute(
+                units = {row["id"]: dict(row) for row in store.execute(
                     "SELECT * FROM unit WHERE id IN (SELECT unit_id FROM sent WHERE batch_id = ?)", (batch_id,))}
+                if strangers:
+                    # A batch taken back without a record of its contents: work out what each result belongs to.
+                    for unit_id in strangers:
+                        unit = everything.get(unit_id)
+                        if unit is None:
+                            continue
+                        model = model_for(unit, close)
+                        models[unit_id] = model
+                        units[unit_id] = unit
+                        store.execute("INSERT OR REPLACE INTO unit (id, counterpart, first_ts, last_ts, messages, characters, is_group) "
+                                      "VALUES (?, ?, ?, ?, ?, ?, ?)", (unit["id"], unit["counterpart"], unit["first_ts"], unit["last_ts"],
+                                                                      unit["messages"], unit["characters"], 1 if unit["is_group"] else 0))
+                        store.execute("INSERT OR IGNORE INTO sent (unit_id, model, batch_id, attempts, estimate_usd) VALUES (?, ?, ?, 1, 0)",
+                                      (unit_id, model, batch_id))
                 succeeded = errored = other = 0
                 cost = 0.0
                 for line in lines:
@@ -412,6 +512,7 @@ class Runner:
         self.wake = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.problem = ""
+        self.stage = ""                              # what the runner is doing right now, in plain words
         self.last_checked = ""
         self.lock = threading.Lock()
         self.one_at_a_time = threading.Lock()      # a round never overlaps another, whoever asks for it
@@ -436,17 +537,31 @@ class Runner:
         with self.one_at_a_time:
             return self._step()
 
+    def _say(self, text: str) -> None:
+        self.stage = text
+
+    def _everything(self) -> Dict[str, Dict[str, object]]:
+        conn = index.connect(readonly=True)
+        try:
+            return {unit["id"]: unit for unit in all_units(conn)[0]}
+        finally:
+            conn.close()
+
     def _step(self) -> bool:
         active = _setting("active") == "1"
+        if active and not self._in_flight():
+            self._say("Checking with Anthropic for anything already sent")
+            adopt_lost_batches()
         if self._in_flight():
-            collect()
+            self._say("Collecting results")
+            collect(lookup=self._everything)
         self.last_checked = reading._now()
         if active and not self._in_flight():
             if not index.is_ready():
                 return False
             conn = index.connect(readonly=True)
             try:
-                outcome = send_wave(conn)
+                outcome = send_wave(conn, say=self._say)
             finally:
                 conn.close()
             if outcome["sent"] == 0:
@@ -455,7 +570,9 @@ class Runner:
                 _set("finished_at", reading._now())
                 _set("ended", "finished" if outcome["still_waiting"] == 0 else "stopped at the cap")
                 _set("active", "0")
+                self._say("")
                 return False
+        self._say("Waiting for Anthropic to finish reading" if self._in_flight() else "")
         return active or self._in_flight() > 0
 
     def _loop(self) -> None:
@@ -512,6 +629,7 @@ def start(conn: sqlite3.Connection) -> Dict[str, object]:
                     model="%s; %s for %s" % (DEFAULT_MODEL, CLOSE_MODEL, ", ".join(planned["close_people_found"]) or "nobody"))
     _set("target", str(status()["read"] + status()["being_read"] + planned["to_send"]))
     _set("started_at", _setting("started_at") or reading._now())
+    _set("started_epoch", _setting("started_epoch") or str(time.time()))
     _set("ended", "")
     _set("active", "1")
     runner.ensure_running()
@@ -564,7 +682,7 @@ def status() -> Dict[str, object]:
         "batches": batches,
         "being_read": being_read, "read": read[0], "messages_read": read[1], "not_read": not_read, "declined": declined,
         "spent_usd": round(spent(), 2), "cap_usd": FULL_CAP_USD, "target": int(_setting("target", "0") or 0),
-        "problem": runner.problem, "problems": problems, "last_checked": runner.last_checked,
+        "problem": runner.problem, "stage": runner.stage, "problems": problems, "last_checked": runner.last_checked,
         "key": claude_api.status(),
     }
 

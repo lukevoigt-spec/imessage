@@ -1363,13 +1363,15 @@ function fullProgress(st) {
   const fill = h("div", { class: "bar-sent" });
   fill.style.width = (target ? Math.round(100 * st.read / target) : 0) + "%";
   const busy = st.active || st.being_read > 0;
-  const headline = busy ? (st.being_read ? "Anthropic is reading " + fmt(st.being_read) + " stretches" : "Preparing the next wave…")
+  const headline = busy ? (st.being_read ? "Anthropic is reading " + fmt(st.being_read) + " stretches" : "Preparing and sending…")
     : st.ended === "finished" ? "The full read is finished" : st.ended === "stopped at the cap" ? "Stopped at the spending cap"
     : st.ended === "stopped by you" ? "Stopped" : st.ended === "stopped by a problem" ? "Stopped by a problem" : "Not running";
   return h("div", { class: "panel" }, h("h2", { text: headline }),
     h("div", { class: "cards" }, card(fmt(st.read) + (target ? " of " + fmt(target) : ""), "stretches read"), card(fmt(st.messages_read), "messages read"),
       card(usd(st.spent_usd) + " of " + usd(st.cap_usd), "spent"), card(fmt(st.being_read), "being read now")),
     h("div", { class: "bar-track tall" }, fill),
+    busy && st.stage ? h("p", {}, h("strong", { text: "Right now: " }), st.stage + ".") : null,
+    busy && !st.being_read ? h("p", { class: "small muted", text: "This part happens on your Mac: cutting your history into stretches and uploading them. Keep the app open until the \"being read now\" number appears." }) : null,
     busy ? h("p", { text: "Batches usually finish within an hour and can take up to a day. You can quit iMessage Explorer and close the Terminal window: Anthropic carries on reading. Open the app again later and it collects the results and sends the next wave by itself." }) : null,
     st.last_checked && busy ? h("p", { class: "small muted", text: "Last checked " + st.last_checked + ". Checks every minute while the app is open." }) : null,
     st.problem ? h("div", { class: "notice" }, h("strong", { text: "Problem: " }), st.problem, busy ? " The app will keep trying." : "") : null,

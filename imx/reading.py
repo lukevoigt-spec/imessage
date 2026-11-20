@@ -183,7 +183,9 @@ CREATE TABLE IF NOT EXISTS review (
 );
 """
 
-_store_lock = threading.Lock()
+# One thread at a time touches reading.db. Re-entrant, so that a function holding it can never
+# freeze the app by calling another that takes it; a test also checks that no code does so.
+_store_lock = threading.RLock()
 
 
 def _store() -> sqlite3.Connection:

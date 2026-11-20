@@ -57,6 +57,8 @@ class FakeAnthropic:
         self.tokens = tokens
         self.batches = {}                 # id -> {"requests": [...], "polls": n, "cancelled": bool}
         self.refuse_create = None         # set to (status, headers, message) to make the next create fail
+        self.lose_reply = False           # take the next batch, but let the app think the upload failed
+        self.created_at = "2099-01-01T00:00:00.123456789Z"
         self.fail_ids = set()             # custom ids that come back as errored
         self.calls = []
 
@@ -70,7 +72,15 @@ class FakeAnthropic:
                 return reply(status, {"type": "error", "error": {"type": "rate_limit_error", "message": message}}, headers)
             batch_id = "msgbatch_%04d" % (len(self.batches) + 1)
             self.batches[batch_id] = {"requests": body["requests"], "polls": 0, "cancelled": False}
+            if self.lose_reply:
+                self.lose_reply = False
+                raise AIError("Could not reach Anthropic: connection reset", retryable=True)
             return reply(200, {"id": batch_id, "processing_status": "in_progress"})
+        if method == "GET" and path.startswith("/v1/messages/batches?"):
+            return reply(200, {"has_more": False, "data": [
+                {"id": batch_id, "created_at": self.created_at, "processing_status": "in_progress",
+                 "request_counts": {"processing": len(batch["requests"]), "succeeded": 0, "errored": 0, "canceled": 0, "expired": 0}}
+                for batch_id, batch in self.batches.items()]})
         if method == "POST" and path.endswith("/cancel"):
             self.batches[path.split("/")[-2]]["cancelled"] = True
             return reply(200, {"processing_status": "canceling"})
@@ -148,6 +158,7 @@ class FullReadTests(unittest.TestCase):
         self.fail("the full read did not finish")
 
     def begin(self):
+        fullread._set("started_epoch", "1")              # so batches the stand-in holds count as made during this read
         fullread._set("active", "1")
 
     def test_the_whole_history_is_cut_into_units_and_short_exchanges_are_left_out(self):
@@ -291,6 +302,51 @@ class FullReadTests(unittest.TestCase):
         self.run_to_end()                                                       # the next round goes through
         self.assertEqual(fullread.status()["read"], 4)
 
+    def test_a_batch_anthropic_took_but_the_app_never_heard_about_is_taken_back_not_sent_again(self):
+        fullread.set_close_people(["Avery Stone"])
+        fullread.start(self.conn)
+        self.fake.lose_reply = True
+        with self.assertRaises(AIError):
+            fullread.runner.step()                       # the upload "failed", but Anthropic has the batch
+        self.assertEqual(fullread.status()["being_read"], 0)
+        self.assertEqual(len(self.fake.batches), 1)
+        self.run_to_end()
+        # The same four conversations were never sent a second time, and their results were collected and paid for once.
+        self.assertEqual(len(self.fake.batches), 1)
+        self.assertEqual(len(self.fake.sent_ids()), 4)
+        now = fullread.status()
+        self.assertEqual((now["read"], now["messages_read"], now["ended"]), (4, 116, "finished"))
+        self.assertAlmostEqual(fullread.spent(), 0.012)                         # Opus for Avery's two, Sonnet for the rest
+        by_model = {row[0]: row[1] for row in fullread._store().execute("SELECT model, COUNT(*) FROM digest GROUP BY model")}
+        self.assertEqual(by_model, {"claude-opus-5-5": 2, "claude-sonnet-5-5": 2})
+
+    def test_batches_from_before_this_read_began_are_left_alone(self):
+        self.fake.created_at = "2020-01-01T00:00:00Z"
+        self.fake.batches["msgbatch_old"] = {"requests": [{"custom_id": "someone-elses", "params": {"model": "claude-sonnet-5-5"}}],
+                                             "polls": 0, "cancelled": False}
+        fullread.start(self.conn)
+        self.assertEqual(fullread.adopt_lost_batches(), 0)
+        self.assertEqual(fullread.status()["batches"], [])
+
+    def test_timestamps_from_anthropic_are_understood(self):
+        self.assertEqual(fullread._epoch("1970-01-01T00:00:10Z"), 10.0)
+        self.assertEqual(fullread._epoch("1970-01-01T00:00:10.500000123Z"), 10.5)
+        self.assertEqual(fullread._epoch("1970-01-01T01:00:10+01:00"), 10.0)
+        self.assertEqual(fullread._epoch("not a time"), 0.0)
+
+    def test_uploads_are_split_into_small_batches_and_the_screen_says_what_is_happening(self):
+        saved = fullread.BATCH_REQUESTS
+        fullread.BATCH_REQUESTS = 3
+        said = []
+        try:
+            outcome = fullread.send_wave(self.conn, say=said.append)
+        finally:
+            fullread.BATCH_REQUESTS = saved
+        self.assertEqual((outcome["sent"], outcome["batches"]), (4, 2))
+        self.assertEqual([len(batch["requests"]) for batch in self.fake.batches.values()], [3, 1])
+        self.assertEqual(said, ["Working out what to send", "Uploading: 0 of 4 stretches in this wave sent so far",
+                                "Uploading: 3 of 4 stretches in this wave sent so far"])
+
     def test_estimates_rest_on_what_the_pilot_measured(self):
         before = fullread.plan(self.conn)
         self.assertFalse(before["estimate_from_your_messages"])
@@ -349,6 +405,45 @@ class FullReadTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertFalse(runner.thread.is_alive())
         self.assertEqual((fullread.status()["read"], fullread.status()["ended"]), (4, "finished"))
+
+
+class LockingTests(unittest.TestCase):
+    """reading.db is guarded by one lock. Code holding it must not call anything that takes it again:
+    that is how the app would freeze. This reads the source and checks."""
+
+    def test_nothing_that_takes_the_store_lock_is_called_while_holding_it(self):
+        import ast
+        takers = {"_setting", "_set", "spent", "close_people", "set_close_people", "rates", "_measured", "_state", "_outstanding",
+                  "status", "_write", "_done_pairs", "_in_flight", "_began", "plan", "collect", "send_wave", "adopt_lost_batches",
+                  "digest_people", "digests_for", "results", "pilot_report", "review_queue", "unit_for_review", "save_review", "read_unit"}
+        for name in ("fullread.py", "reading.py"):
+            tree = ast.parse((ROOT / "imx" / name).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.With):
+                    continue
+                if not any("_store_lock" in ast.dump(item.context_expr) for item in node.items):
+                    continue
+                for inner in ast.walk(node):
+                    if isinstance(inner, ast.Call):
+                        called = inner.func.attr if isinstance(inner.func, ast.Attribute) else getattr(inner.func, "id", "")
+                        self.assertNotIn(called, takers, "%s line %d calls %s() while holding the store lock" % (name, inner.lineno, called))
+
+    def test_a_read_started_by_the_previous_version_still_knows_when_it_began(self):
+        tmp = Path(tempfile.mkdtemp(prefix="imx-began-test-"))
+        saved = os.environ.get("IMX_DATA_DIR")
+        os.environ["IMX_DATA_DIR"] = str(tmp)
+        try:
+            self.assertEqual(fullread._began(), 0.0)
+            fullread._set("started_at", "2026-11-20 03:15:00")           # all the previous version recorded
+            self.assertEqual(fullread._began(), time.mktime(time.strptime("2026-11-20 03:15:00", "%Y-%m-%d %H:%M:%S")))
+            fullread._set("started_epoch", "12345.5")
+            self.assertEqual(fullread._began(), 12345.5)
+        finally:
+            if saved is None:
+                os.environ.pop("IMX_DATA_DIR", None)
+            else:
+                os.environ["IMX_DATA_DIR"] = saved
+            shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 class FullReadRouteTests(unittest.TestCase):

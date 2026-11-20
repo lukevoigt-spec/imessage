@@ -5,4 +5,4 @@ when you explicitly confirm an "Ask AI" request, or when an AI tool you
 connected yourself runs a search.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
