@@ -48,6 +48,7 @@ REQUIRED_FILES = [
     "imx/index.py",
     "imx/claude_api.py",
     "imx/junk.py",
+    "imx/fullread.py",
     "imx/reading.py",
     "imx/data/vader_lexicon.txt",
     "imx/data/VADER_LICENSE.txt",

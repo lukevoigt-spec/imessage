@@ -207,3 +207,4 @@ label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--i
 .sample { color: var(--muted); font-size: 13px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nowrap { white-space: nowrap; }
 textarea.report-text { width: 100%; font-family: var(--mono); font-size: 12px; margin: 10px 0; }
+.bar-track.tall { height: 18px; margin: 4px 0 12px; }

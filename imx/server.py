@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, activity, ai, claude_api, extract, index, insights, junk, labels, paths, query, reading,
+from . import (__version__, activity, ai, claude_api, extract, fullread, index, insights, junk, labels, paths, query, reading,
                science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
@@ -251,6 +251,11 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/reading/status": lambda conn, p: reading.status(),
     "/api/reading/results": lambda conn, p: reading.results(conn),
     "/api/reading/report": lambda conn, p: reading.pilot_report(conn),
+    "/api/full/plan": lambda conn, p: _full_plan(conn),
+    "/api/full/status": lambda conn, p: fullread.status(),
+    "/api/full/people": lambda conn, p: {"people": fullread.digest_people()},
+    "/api/full/digests": lambda conn, p: fullread.digests_for(p.get("name", ""), p.get("group") == "1", int(p.get("offset") or 0),
+                                                             newest_first=p.get("newest") == "1"),
     "/api/reading/queue": lambda conn, p: reading.review_queue(),
     "/api/reading/unit": lambda conn, p: reading.unit_for_review(conn, p.get("id", "")),
 }
@@ -338,6 +343,20 @@ def _reading_start(conn, body) -> dict:
     return reading.start(conn, *_reading_args(body))
 
 
+def _full_plan(conn) -> dict:
+    planned = fullread.plan(conn)
+    planned.pop("_pending")          # transcripts stay on the server; the page only needs the counts
+    planned["key"] = claude_api.status()
+    return planned
+
+
+def _full_start(conn, body) -> dict:
+    # The confirm flag is set only by the button under the preview of what would be sent.
+    if body.get("confirm") is not True:
+        raise QueryError("Confirm the preview before sending conversations to the AI.")
+    return fullread.start(conn)
+
+
 def _save_key(conn, body) -> dict:
     """Store the API key in the Keychain, then ask Anthropic (sending no messages) which models it may use."""
     claude_api.save_key(str(body.get("key") or ""))
@@ -346,6 +365,9 @@ def _save_key(conn, body) -> dict:
 
 POST_ROUTES: Dict[str, Callable] = {
     "/api/junk/change": _junk_change,
+    "/api/full/start": _full_start,
+    "/api/full/stop": lambda conn, b: fullread.stop(),
+    "/api/full/close-people": lambda conn, b: {"close_people": fullread.set_close_people(list(b.get("names") or []))},
     "/api/key/save": _save_key,
     "/api/key/check": lambda conn, b: {"models": claude_api.check_models(reading.MODELS)},
     "/api/reading/start": _reading_start,
@@ -382,6 +404,7 @@ def serve(port: int = 8765, open_browser: bool = True) -> str:
     print("Leave this window open while you use it. To stop, use Quit on the Setup screen or close this window.")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    fullread.resume_if_needed()      # carry on with a full read that was under way when the app was last closed
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

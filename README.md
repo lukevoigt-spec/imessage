@@ -46,7 +46,7 @@ Seven sections across the top. Explanations of how each number is worked out sit
 | **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume; the automated senders that were set aside |
 | **Search** | Find messages by words, phrases and filters; saved topics |
 | **Patterns** | Over time, replies and read times, reactions, tone, words and phrases, expressions and style, "we" against "I", and what gets shared |
-| **Reading** | Optional. Three AI models read a sample of your real conversations and write a digest of each; you mark them, blind, and see what a full read would cost |
+| **Reading** | Optional. AI reads every conversation and writes a digest of each; read them back person by person, in date order |
 | **Ask AI** | Optional. Send a selection of messages to Claude with a question, after a preview and your confirmation |
 | **Setup** | Update or quit the app, connect an AI tool, see what your Mac records, and what has been shared with AI |
 
@@ -128,18 +128,30 @@ someone@example.com,Jordan Pike
 
 ## Reading: have AI read your conversations (optional)
 
-Counting cannot tell you what a conversation was about, how it felt, or what was left unresolved. Reading can. The **Reading** section runs a pilot:
+Counting cannot tell you what a conversation was about, how it felt, or what was left unresolved. Reading can. The **Reading** section has four screens.
 
-1. Three Claude models (Haiku, Sonnet and Opus) each read the same sample of your real conversations: by default 40 stretches of conversation with each of the three people you messaged most in the last full year.
-2. Each writes a digest: a summary, topics, how it read emotionally, what happened, any friction and how it ended, promises made, and people and places named.
-3. On **Review digests** you read the original conversation beside the three digests and mark each one right, missing something, or wrong. You are not told which model wrote which, and the letters are shuffled for every conversation, so your marks are not swayed by a model's name.
-4. The pilot screen then shows what each model cost and what reading your whole history would cost with each.
+### Full read
 
-Safeguards:
+Every conversation in your history, one-to-one and group, is read and given a digest: a summary, topics, how it read emotionally, what happened, any friction and how it ended, promises made, and people and places named.
+
+- **Who reads what.** Claude Sonnet reads everything, except the people you name on the screen, who are read by Claude Opus. Type a name exactly as it appears in the app.
+- **What is left out.** Automated senders (codes, alerts, marketing), and exchanges too short to say anything: under 5 messages and under 40 words.
+- **How it runs.** Conversations are sent to Anthropic in batches, which are processed at half price, usually within an hour and at most within a day. You can quit the app while a batch is being processed. Open it again later and it collects the results and sends the next wave by itself.
+- **The cap.** $150. Conversations go out in waves sized so that even if every one still being read cost twice the estimate, the total would stay under the cap. The true cost of each wave is recorded before the next is sized.
+- **Order.** The people read by Opus go first, then the busiest conversations, so a stop or the cap falls on the quietest ones.
+- **Nothing is paid for twice.** Digests from the pilot are reused. A conversation already read is never sent again, and new messages you bring in later only cause the new stretches to be read.
+
+### Digests
+
+One person or group at a time, in date order: the story of the conversation, stretch by stretch. Each digest can show the messages behind it. A digest is one model's reading, so open the messages beside anything that surprises you.
+
+### Pilot and Pilot review
+
+The pilot is how the model was chosen. Three Claude models (Haiku, Sonnet and Opus) each read the same sample of conversations; the pilot screen shows what each cost and what reading everything would cost with each. Pilot review shows the original conversation beside the three digests without saying which model wrote which, if you want to compare them yourself. The pilot has its own $30 cap.
+
+Safeguards that apply to all of it:
 
 - Nothing is sent until you have seen exactly what would be sent and pressed the button.
-- A hard spending cap of $30. Before every request the app checks that even the dearest possible reply would still fit, and stops if not.
-- A conversation that has been read is never paid for twice. You can stop and continue later.
 - Digests and the record of spending are kept in their own file in `~/.imessage-explorer`, untouched by bringing in new messages.
 
 ## Your Anthropic key

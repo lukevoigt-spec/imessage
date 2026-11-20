@@ -528,7 +528,7 @@ async function renderConnect() {
       meta.activity.length ? h("div", { class: "scroll" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "When" }), h("th", { text: "What" }), h("th", { class: "n", text: "Messages" }), h("th", { text: "Conversations" }))),
         h("tbody", {}, meta.activity.map((e) => h("tr", {}, h("td", { text: e.when }),
-          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : "Find topics" }),
+          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : e.kind === "full_read" ? "Full read" : "Find topics" }),
           h("td", { class: "n", text: fmt(e.messages_sent !== undefined ? e.messages_sent : e.messages_returned) }),
           h("td", { text: (e.conversations || []).join(", ") }))))))
         : h("p", { class: "muted", text: "Nothing yet. Every AI request and connected-tool search will be listed here, without the message text." })),
@@ -554,12 +554,12 @@ const NAV = [
   { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"], ["hidden", "Hidden senders"]] },
   { id: "search", label: "Search", screens: [["search", "Search"], ["topics", "Topics"]] },
   { id: "patterns", label: "Patterns", screens: [["trends", "Over time"], ["replies", "Replies"], ["reactions", "Reactions"], ["tone", "Tone"], ["words", "Words"], ["expressions", "Expressions"], ["language", "We and I"], ["sharing", "Sharing"]] },
-  { id: "reading", label: "Reading", screens: [["pilot", "Reading pilot"], ["review", "Review digests"]] },
+  { id: "reading", label: "Reading", screens: [["full", "Full read"], ["digests", "Digests"], ["pilot", "Pilot"], ["review", "Pilot review"]] },
   { id: "ask", label: "Ask AI", screens: [["ask", "Ask AI"]] },
   { id: "setup", label: "Setup", screens: [["connect", "Setup"]] },
 ];
 /* Screens that always use your whole history, so the filter bar is hidden on them. */
-const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden"]);
+const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests"]);
 const lastScreen = {};
 const SCREENS = {};
 
@@ -814,7 +814,7 @@ async function renderHome() {
       h("div", { class: "row" },
         h("button", { text: "Find a message", onclick: () => setTab("search") }), h("button", { text: "See your people", onclick: () => setTab("ranking") }),
         h("button", { text: "Open someone's profile", onclick: () => { state.person = ""; setTab("profile"); } }), h("button", { text: "Explore patterns", onclick: () => setTab("trends") }),
-        h("button", { text: "Have AI read your conversations", onclick: () => setTab("pilot") }),
+        h("button", { text: "Have AI read your conversations", onclick: () => setTab("full") }),
         h("button", { text: "Ask AI a question", onclick: () => setTab("ask") })),
       h("p", { class: "muted small", text: "Last updated " + (d.import.finished_at || "never") + ". Press Update messages at the top right to bring in new ones." })));
 }
@@ -1344,6 +1344,167 @@ async function renderReview(unitId) {
       h("div", { class: "readings" }, data.readings.map((r) => digestCard(id, r, refreshProgress)))));
 }
 
+/* ---------- Full read: a digest of every conversation ---------- */
+
+const full = { timer: null };
+
+function fullProgress(st) {
+  const target = Math.max(st.target || 0, st.read + st.being_read);
+  const fill = h("div", { class: "bar-sent" });
+  fill.style.width = (target ? Math.round(100 * st.read / target) : 0) + "%";
+  const busy = st.active || st.being_read > 0;
+  const headline = busy ? (st.being_read ? "Anthropic is reading " + fmt(st.being_read) + " stretches" : "Preparing the next wave…")
+    : st.ended === "finished" ? "The full read is finished" : st.ended === "stopped at the cap" ? "Stopped at the spending cap"
+    : st.ended === "stopped by you" ? "Stopped" : st.ended === "stopped by a problem" ? "Stopped by a problem" : "Not running";
+  return h("div", { class: "panel" }, h("h2", { text: headline }),
+    h("div", { class: "cards" }, card(fmt(st.read) + (target ? " of " + fmt(target) : ""), "stretches read"), card(fmt(st.messages_read), "messages read"),
+      card(usd(st.spent_usd) + " of " + usd(st.cap_usd), "spent"), card(fmt(st.being_read), "being read now")),
+    h("div", { class: "bar-track tall" }, fill),
+    busy ? h("p", { text: "Batches usually finish within an hour and can take up to a day. You can quit iMessage Explorer and close the Terminal window: Anthropic carries on reading. Open the app again later and it collects the results and sends the next wave by itself." }) : null,
+    st.last_checked && busy ? h("p", { class: "small muted", text: "Last checked " + st.last_checked + ". Checks every minute while the app is open." }) : null,
+    st.problem ? h("div", { class: "notice" }, h("strong", { text: "Problem: " }), st.problem, busy ? " The app will keep trying." : "") : null,
+    st.not_read || st.declined || st.problems.length ? h("p", { class: "small muted", text:
+      (st.not_read ? fmt(st.not_read) + " stretches could not be read after two tries. " : "") +
+      (st.declined ? fmt(st.declined) + " were declined by the model. " : "") +
+      (st.problems.length ? "Reasons given: " + st.problems.map((p) => p.problem.replace("full read: ", "") + " (" + p.times + ")").join("; ") + "." : "") }) : null,
+    st.batches.length ? h("details", { class: "definition" }, h("summary", { text: "Batches sent (" + st.batches.length + ")" }),
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Batch" }), h("th", { text: "Sent" }), h("th", { class: "n", text: "Stretches" }), h("th", { text: "State" }),
+          h("th", { class: "n", text: "Read" }), h("th", { class: "n", text: "Failed" }), h("th", { class: "n", text: "Cost" }))),
+        h("tbody", {}, st.batches.map((b) => h("tr", {}, h("td", { text: b.id }), h("td", { class: "nowrap", text: b.created_at }), h("td", { class: "n", text: fmt(b.requests) }),
+          h("td", { text: b.status === "collected" ? "collected " + b.collected_at : "being processed" }),
+          h("td", { class: "n", text: fmt(b.succeeded) }), h("td", { class: "n", text: fmt(b.errored + b.not_processed) }), h("td", { class: "n", text: usd(b.spent_usd) }))))))) : null,
+    h("div", { class: "row" },
+      busy ? h("button", { text: "Stop the full read", onclick: async () => { await post("/api/full/stop", {}); watchFull(); } }) : null,
+      st.read ? h("button", { class: busy ? "" : "primary", text: "Read the digests", onclick: () => setTab("digests") }) : null,
+      !busy ? h("button", { text: st.ended === "finished" ? "Check for anything new to read" : "Review and continue", onclick: () => { full.plan = true; renderFull(); } }) : null));
+}
+
+async function watchFull() {
+  clearTimeout(full.timer);
+  if (state.tab !== "full") return;
+  const st = await request("/api/full/status");
+  if (state.tab !== "full") return;
+  show(fullProgress(st));
+  if (st.active || st.being_read > 0) full.timer = setTimeout(() => watchFull().catch(() => {}), 5000);
+}
+
+async function renderFull() {
+  clearTimeout(full.timer);
+  const st = await request("/api/full/status");
+  if (!st.key.key_found) { show(keyPanel(renderFull)); return; }
+  if ((st.active || st.being_read > 0 || st.read > 0) && !full.plan) return watchFull();
+  full.plan = false;
+  loading("Working out what there is to read. This takes a few seconds on a large history…");
+  const plan = await request("/api/full/plan");
+  const [normal, close] = plan.models;
+
+  const name = h("input", { list: "contact-list", placeholder: "Type a name exactly as it appears in the app", autocomplete: "off", "aria-label": "Person to read with the stronger model" });
+  const saveClose = async (names) => { await post("/api/full/close-people", { names }); full.plan = true; renderFull(); };
+  const missing = plan.close_people.filter((n) => !plan.close_people_found.includes(n));
+  const out = h("div", {});
+  const begin = async (button) => {
+    button.disabled = true;
+    try { await post("/api/full/start", { confirm: true }); watchFull(); }
+    catch (error) { button.disabled = false; out.replaceChildren(h("p", { class: "error", text: error.message })); }
+  };
+  const row = (m) => h("tr", {}, h("td", {}, h("strong", { text: m.name })), h("td", { class: "n", text: fmt(m.units) }), h("td", { class: "n", text: fmt(m.messages) }),
+    h("td", { class: "n", text: fmt(m.already_read) }), h("td", { class: "n", text: fmt(m.being_read) }), h("td", { class: "n", text: fmt(m.to_send) }),
+    h("td", { class: "n", text: usd(m.estimated_cost_usd) }));
+
+  show(
+    h("div", { class: "panel" }, h("h2", { text: "Full read" }),
+      h("p", { text: "Every conversation in your history is read and given a digest: what it was about, how it felt, what happened, any friction, and what was promised. " + normal.name + " reads everything, except the people you name here, who are read by " + close.name + "." }),
+      h("h3", { text: "Read by " + close.name }),
+      plan.close_people.length ? h("div", { class: "chips" }, plan.close_people.map((n) => h("span", { class: "chip" }, n + " ",
+        h("button", { class: "link", text: "remove", "aria-label": "Remove " + n, onclick: () => saveClose(plan.close_people.filter((x) => x !== n)) }))))
+        : h("p", { class: "muted", text: "Nobody yet. Everyone would be read by " + normal.name + "." }),
+      missing.length ? h("div", { class: "notice", text: "No one-to-one conversation was found under: " + missing.join(", ") + ". Names must match the app exactly; pick from the suggestions as you type." }) : null,
+      h("div", { class: "row grow" }, name, h("button", { text: "Add", onclick: () => { if (name.value.trim()) saveClose(plan.close_people.concat([name.value.trim()])); } }))),
+    h("div", { class: "panel" }, h("h2", { text: "This is what would leave your Mac" }),
+      h("p", {}, h("strong", { text: fmt(plan.messages) + " messages" }), " in " + fmt(plan.conversations) + " conversations (" + fmt(plan.people) + " people and " + fmt(plan.groups) +
+        " group chats), from " + plan.first_day + " to " + plan.last_day + ", cut into " + fmt(plan.units) + " stretches. Names appear as they do in your contacts. Other people's words are included."),
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Read by" }), h("th", { class: "n", text: "Stretches" }), h("th", { class: "n", text: "Messages" }), h("th", { class: "n", text: "Already read" }),
+          h("th", { class: "n", text: "Being read" }), h("th", { class: "n", text: "Still to send" }), h("th", { class: "n", text: "Estimated cost" }))),
+        h("tbody", {}, row(normal), row(close)))),
+      h("p", {}, "Estimated cost of what is left: ", h("strong", { text: usd(plan.estimated_cost_usd) }), ". Spent so far: " + usd(plan.spent_usd) + ". Cap: " + usd(plan.cap_usd) + "."),
+      h("p", { class: "small muted", text: (plan.estimate_from_your_messages ? "The estimate comes from what the pilot measured on your own messages, at the half-price batch rate. " : "No pilot results were found, so the estimate uses round figures. ") +
+        "Left out: automated senders, and " + fmt(plan.too_short.units) + " exchanges too short to say anything (" + fmt(plan.too_short.messages) + " messages)." }),
+      definition("Conversations are sent in waves. Each wave is sized so that even if every conversation still being read cost twice the estimate, the total would stay under the cap; the true cost of each wave is recorded when its results arrive, before the next is sized. The people read by the stronger model go first, then the busiest conversations, so a stop or the cap falls on the quietest ones. A conversation already read, including in the pilot, is never sent again."),
+      plan.to_send
+        ? h("button", { class: "primary", text: (st.read ? "Continue: send " : "Start the full read: send ") + fmt(plan.to_send) + " stretches", disabled: plan.remaining_usd <= 0, onclick: (event) => begin(event.currentTarget) })
+        : h("p", { text: "Everything has been read." }),
+      out,
+      st.read ? h("p", {}, h("button", { class: "link", text: "Back to progress", onclick: () => watchFull() })) : null));
+}
+
+/* ---------- Digests: the story of a conversation, stretch by stretch ---------- */
+
+const digestView = { name: "", group: false, newest: false };
+
+function digestBlock(d) {
+  const g = d.digest;
+  const list = (title, items, render) => items && items.length ? [h("h4", { text: title }), h("ul", { class: "tight" }, items.map((item) => h("li", { text: render(item) })))] : null;
+  const holder = h("div", {});
+  const toggle = h("button", { class: "link small", text: "Show the messages", onclick: async () => {
+    if (holder.childNodes.length) { holder.replaceChildren(); toggle.textContent = "Show the messages"; return; }
+    try {
+      const data = await request("/api/reading/unit?id=" + encodeURIComponent(d.unit_id));
+      holder.replaceChildren(h("div", { class: "context" }, data.messages.map((m) => messageNode(m, []))));
+      toggle.textContent = "Hide the messages";
+    } catch (error) { holder.replaceChildren(h("p", { class: "error", text: error.message })); }
+  } });
+  return h("div", { class: "reading-card" },
+    h("h3", { text: d.first_day === d.last_day ? d.first_day : d.first_day + " to " + d.last_day }),
+    h("p", { text: g.summary }),
+    h("p", {}, h("span", { class: "chip", text: g.closeness }), " ", g.tone),
+    g.topics.length ? h("div", { class: "chips" }, g.topics.map((t) => h("span", { class: "chip", text: t }))) : null,
+    list("What happened", g.events, (e) => e.date + ": " + e.what),
+    list("Friction", g.tensions, (t) => t.what + " (" + t.resolution + ")"),
+    list("Promises", g.promises, (p) => p.who + ": " + p.what),
+    g.notable ? h("p", {}, h("strong", { text: "Worth remembering: " }), g.notable) : null,
+    h("p", { class: "small muted" }, fmt(d.messages) + " messages, read by " + d.read_by + ". ", toggle),
+    holder);
+}
+
+async function renderDigests() {
+  loading();
+  const found = await request("/api/full/people");
+  if (!found.people.length) {
+    show(h("div", { class: "panel" }, h("h2", { text: "No digests yet" }),
+      h("p", { text: "Digests appear here as conversations are read, by the pilot or the full read." }),
+      h("button", { class: "primary", text: "Go to the full read", onclick: () => setTab("full") })));
+    return;
+  }
+  if (!found.people.some((p) => p.name === digestView.name && p.is_group === digestView.group)) {
+    digestView.name = found.people[0].name; digestView.group = found.people[0].is_group;
+  }
+  const who = h("select", { "aria-label": "Whose digests" }, found.people.map((p, i) =>
+    h("option", { value: String(i), text: p.name + (p.is_group ? " (group)" : "") + ": " + fmt(p.digests) + " digests, " + p.first_day.slice(0, 4) + " to " + p.last_day.slice(0, 4) })));
+  who.value = String(found.people.findIndex((p) => p.name === digestView.name && p.is_group === digestView.group));
+  who.addEventListener("change", () => { const p = found.people[Number(who.value)]; digestView.name = p.name; digestView.group = p.is_group; renderDigests(); });
+  const order = h("select", { "aria-label": "Order" }, h("option", { value: "", text: "Oldest first" }), h("option", { value: "1", text: "Newest first" }));
+  order.value = digestView.newest ? "1" : "";
+  order.addEventListener("change", () => { digestView.newest = order.value === "1"; renderDigests(); });
+  const listing = h("div", { class: "readings" });
+  const more = h("div", {});
+  let offset = 0;
+  const load = async () => {
+    const query = new URLSearchParams({ name: digestView.name, group: digestView.group ? "1" : "", offset: String(offset), newest: digestView.newest ? "1" : "" });
+    const page = await request("/api/full/digests?" + query.toString());
+    listing.append(...page.digests.map(digestBlock));
+    offset += page.digests.length;
+    more.replaceChildren(offset < page.total
+      ? h("button", { text: "Show more (" + fmt(page.total - offset) + " left)", onclick: load })
+      : h("p", { class: "muted small", text: "That is all " + fmt(page.total) + "." }));
+  };
+  show(h("div", { class: "panel" }, h("h2", { text: "Digests" }),
+    h("p", { text: "One person or group at a time, in date order: the story of the conversation, stretch by stretch. Each digest is one model's reading, so open the messages beside anything that surprises you." }),
+    h("div", { class: "row" }, who, order)), listing, h("div", { class: "spacer" }), more);
+  await load();
+}
+
 /* Ready-made questions for the Ask AI screen. */
 const AI_PRESETS = {
   tone: "Describe the emotional tone of these messages and how it changes over time. Point out warm stretches, tense stretches and turning points, with dates. Note what each person tends to bring emotionally. Be candid but fair, and do not speculate beyond what the messages show.",
@@ -1357,6 +1518,7 @@ Object.assign(SCREENS, {
   trends: renderTrends, replies: renderReplies, reactions: renderReactions, tone: renderTone, words: renderWords,
   expressions: renderExpressions, language: renderLanguage, sharing: renderSharing,
   ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(), hidden: renderHidden,
+  full: renderFull, digests: renderDigests,
 });
 
 start();

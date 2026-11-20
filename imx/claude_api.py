@@ -182,12 +182,22 @@ Transport = Callable[..., Tuple[int, Dict[str, str], bytes]]
 
 
 def _request(method: str, path: str, body: Optional[dict], betas: Tuple[str, ...] = (),
-             transport: Optional[Transport] = None) -> dict:
+             transport: Optional[Transport] = None, lines: bool = False):
+    """One request to Anthropic. Returns the reply as a dict, or with `lines` as a list of dicts (one per line)."""
     key = api_key()
     if not key:
         raise AIError("No Anthropic API key has been saved yet. Add one on the Reading screen.", status=401,
                       kind="authentication_error")
     status, headers, reply = (transport or _curl)(method, path, body, key, betas)
+    if status == 200 and lines:
+        found = []
+        for line in reply.decode("utf-8", "replace").splitlines():
+            if line.strip():
+                try:
+                    found.append(json.loads(line))
+                except ValueError:
+                    continue
+        return found
     try:
         payload = json.loads(reply.decode("utf-8")) if reply else {}
     except ValueError:
@@ -230,6 +240,38 @@ def cost_usd(model: str, usage: dict) -> float:
     return (tokens_in * price_in + int(usage.get("output_tokens") or 0) * price_out) / 1_000_000.0
 
 
+def message_body(model: str, system: str, user_text: str, schema: Optional[dict] = None, effort: str = "medium",
+                 max_tokens: int = 16000) -> Dict[str, object]:
+    """The request for one message, as Anthropic expects it. Used for single requests and inside batches alike."""
+    output_config: Dict[str, object] = {"effort": effort}
+    if schema is not None:
+        output_config["format"] = {"type": "json_schema", "schema": schema}
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "output_config": output_config,
+        "messages": [{"role": "user", "content": user_text}],
+    }
+
+
+def read_message(payload: dict, asked_model: str, price_factor: float = 1.0) -> Dict[str, object]:
+    """Turn Anthropic's reply into the few things the app uses: text, why it stopped, who answered, tokens and cost."""
+    blocks = payload.get("content") if isinstance(payload.get("content"), list) else []
+    text = "".join(str(block.get("text") or "") for block in blocks
+                   if isinstance(block, dict) and block.get("type") == "text").strip()
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    answered_by = str(payload.get("model") or asked_model)
+    return {
+        "text": text,
+        "stop_reason": str(payload.get("stop_reason") or ""),
+        "model": answered_by,
+        "usage": {"input_tokens": int(usage.get("input_tokens") or 0), "output_tokens": int(usage.get("output_tokens") or 0)},
+        # Priced at the model that answered when we know its price, else the one that was asked.
+        "cost_usd": cost_usd(answered_by if answered_by in PRICES else asked_model, usage) * price_factor,
+    }
+
+
 def send(model: str, system: str, user_text: str, schema: Optional[dict] = None, effort: str = "medium",
          max_tokens: int = 16000, fallbacks: bool = False, transport: Optional[Transport] = None) -> Dict[str, object]:
     """Send one request to Claude and return its reply.
@@ -238,35 +280,37 @@ def send(model: str, system: str, user_text: str, schema: Optional[dict] = None,
     (token counts) and `cost_usd`. A reply whose `stop_reason` is "refusal" means the model
     declined; it is returned, not raised, because it was still billed.
     """
-    output_config: Dict[str, object] = {"effort": effort}
-    if schema is not None:
-        output_config["format"] = {"type": "json_schema", "schema": schema}
-    body: Dict[str, object] = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "output_config": output_config,
-        "messages": [{"role": "user", "content": user_text}],
-    }
+    body = message_body(model, system, user_text, schema, effort, max_tokens)
     betas: Tuple[str, ...] = ()
     if fallbacks:
         # If the model declines, let the service retry on its default fallback model.
         body["fallbacks"] = "default"
         betas = (FALLBACK_BETA,)
-    payload = _request("POST", "/v1/messages", body, betas, transport)
-    blocks = payload.get("content") if isinstance(payload.get("content"), list) else []
-    text = "".join(str(block.get("text") or "") for block in blocks
-                   if isinstance(block, dict) and block.get("type") == "text").strip()
-    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-    answered_by = str(payload.get("model") or model)
-    return {
-        "text": text,
-        "stop_reason": str(payload.get("stop_reason") or ""),
-        "model": answered_by,
-        "usage": {"input_tokens": int(usage.get("input_tokens") or 0), "output_tokens": int(usage.get("output_tokens") or 0)},
-        # Priced at the model that answered when we know its price, else the one that was asked.
-        "cost_usd": cost_usd(answered_by if answered_by in PRICES else model, usage),
-    }
+    return read_message(_request("POST", "/v1/messages", body, betas, transport), model)
+
+
+# ---- batches: many requests sent together, processed within a day, at half price -----------------------
+
+BATCH_PRICE_FACTOR = 0.5
+
+
+def batch_create(requests: List[Dict[str, object]], transport: Optional[Transport] = None) -> Dict[str, object]:
+    """Hand Anthropic a batch of requests. Each is {"custom_id": ..., "params": message_body(...)}. Returns the batch."""
+    return _request("POST", "/v1/messages/batches", {"requests": requests}, (), transport)
+
+
+def batch_get(batch_id: str, transport: Optional[Transport] = None) -> Dict[str, object]:
+    """Where a batch has got to. `processing_status` is "ended" when every request has finished."""
+    return _request("GET", "/v1/messages/batches/%s" % batch_id, None, (), transport)
+
+
+def batch_results(batch_id: str, transport: Optional[Transport] = None) -> List[Dict[str, object]]:
+    """Every result of a finished batch, in no particular order. Match them up by `custom_id`."""
+    return _request("GET", "/v1/messages/batches/%s/results" % batch_id, None, (), transport, lines=True)
+
+
+def batch_cancel(batch_id: str, transport: Optional[Transport] = None) -> Dict[str, object]:
+    return _request("POST", "/v1/messages/batches/%s/cancel" % batch_id, {}, (), transport)
 
 
 def send_patiently(*args, attempts: int = 6, sleep: Callable[[float], None] = time.sleep,
