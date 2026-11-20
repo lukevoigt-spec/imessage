@@ -2,13 +2,13 @@
 
 How it works, in plain terms:
 
-- Published versions are marked in the public code repository with a version
-  tag such as v0.3.1. Only tagged versions are ever installed; work in
-  progress is not.
-- "Check for updates" asks GitHub for the list of tags and compares the newest
-  with the version running here. This sends nothing about you or your messages.
-- "Update the app" downloads that version, checks it is complete, swaps it in,
-  and keeps the previous version alongside in case the new one is broken.
+- The published version is whatever is on the main branch of the code
+  repository. Work in progress lives on other branches and is never installed.
+- "Check for a newer version" reads the version number of the published code
+  and compares it with the version running here. This sends nothing about you
+  or your messages.
+- "Update the app" downloads the published code, checks it is complete, swaps
+  it in, and keeps the previous version alongside in case the new one is broken.
 
 Only a copy put in place by the installer updates itself. A folder you
 unzipped by hand, or a developer's working copy, is left alone.
@@ -19,7 +19,6 @@ Safari. That avoids certificate problems some Python installs have.
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
@@ -31,8 +30,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 from . import __version__, paths
 
 REPOSITORY = "lukevoigt-spec/imessage"
-TAGS_URL = "https://api.github.com/repos/%s/tags?per_page=100" % REPOSITORY
-ZIP_URL = "https://github.com/%s/archive/refs/tags/v%%s.zip" % REPOSITORY
+VERSION_URL = "https://raw.githubusercontent.com/%s/main/imx/__init__.py" % REPOSITORY
+ZIP_URL = "https://github.com/%s/archive/refs/heads/main.zip" % REPOSITORY
 INSTALL_COMMAND = "curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash" % REPOSITORY
 
 # Written by the installer into the app's folder. Its presence means "this copy may update itself".
@@ -55,6 +54,7 @@ REQUIRED_FILES = [
 ]
 
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+_DECLARED_RE = re.compile(r'__version__\s*=\s*"([^"]+)"')
 
 
 class UpdateError(Exception):
@@ -92,13 +92,11 @@ def _curl(url: str, destination: Optional[Path] = None) -> bytes:
 
 
 def newest_version(fetch: Callable[[str], bytes] = _curl) -> Optional[str]:
-    """The highest published version, such as '0.3.1', or None if nothing is published yet."""
-    try:
-        tags = json.loads(fetch(TAGS_URL).decode("utf-8"))
-    except ValueError:
-        raise UpdateError("GitHub sent back something unreadable. Try again later.")
-    versions = sorted(v for v in (parse_version(tag.get("name", "")) for tag in tags if isinstance(tag, dict)) if v)
-    return "%d.%d.%d" % versions[-1] if versions else None
+    """The published version, such as '0.3.1', or None if it cannot be told."""
+    match = _DECLARED_RE.search(fetch(VERSION_URL).decode("utf-8", "replace"))
+    if not match or parse_version(match.group(1)) is None:
+        raise UpdateError("Could not tell which version is published. Try again later.")
+    return match.group(1)
 
 
 def check(fetch: Callable[[str], bytes] = _curl) -> Dict[str, object]:
@@ -141,12 +139,12 @@ def version_in(folder: Path) -> Optional[str]:
         text = (folder / "imx" / "__init__.py").read_text(encoding="utf-8")
     except OSError:
         return None
-    match = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+    match = _DECLARED_RE.search(text)
     return match.group(1) if match else None
 
 
 def apply(version: str, target: Optional[Path] = None, fetch_to: Callable[[str, Path], bytes] = _curl) -> Dict[str, object]:
-    """Download one published version and put it in place of the running code.
+    """Download the published code, which must be the given version, and put it in place of the running code.
 
     The previous version is kept next to it as "<folder>.previous". If anything
     fails before the swap, nothing is changed. If the swap itself fails, the
@@ -161,7 +159,7 @@ def apply(version: str, target: Optional[Path] = None, fetch_to: Callable[[str, 
     workspace = Path(tempfile.mkdtemp(prefix="imessage-explorer-update-"))
     try:
         archive = workspace / "download.zip"
-        fetch_to(ZIP_URL % version, archive)
+        fetch_to(ZIP_URL, archive)
         if not archive.exists() or archive.stat().st_size == 0:
             raise UpdateError("The download came back empty. Try again.")
         fresh = _extract(archive, workspace / "unpacked")
@@ -169,7 +167,8 @@ def apply(version: str, target: Optional[Path] = None, fetch_to: Callable[[str, 
         if missing:
             raise UpdateError("The download is incomplete (missing %s) and was refused." % ", ".join(missing[:3]))
         if version_in(fresh) != version:
-            raise UpdateError("The download says it is version %s, not %s, and was refused." % (version_in(fresh), version))
+            raise UpdateError("The download is version %s, not the %s that was expected. Check again and retry."
+                              % (version_in(fresh), version))
         (fresh / MARKER).write_text("Installed by the in-app updater.\n", encoding="utf-8")
 
         previous = target.with_name(target.name + ".previous")

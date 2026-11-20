@@ -512,7 +512,7 @@ function appPanel(version) {
     h("p", { text: "You are running version " + version + "." }),
     h("div", { class: "row" }, h("button", { text: "Check for a newer version", onclick: check }), h("button", { class: "quiet", text: "Quit iMessage Explorer", onclick: quit })),
     out,
-    h("p", { class: "small muted", text: "Checking asks GitHub which versions exist. Nothing about you or your messages is sent. Updating the app never touches your messages, labels, pins or topics." }));
+    h("p", { class: "small muted", text: "Checking asks GitHub which version is published. Nothing about you or your messages is sent. Updating the app never touches your messages, labels, pins or topics." }));
 }
 
 async function renderConnect() {

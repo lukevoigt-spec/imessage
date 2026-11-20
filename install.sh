@@ -62,21 +62,8 @@ else
   if [ -n "${IMX_INSTALL_ZIP_URL:-}" ]; then
     ZIP_URL="$IMX_INSTALL_ZIP_URL"                      # used by tests
   else
-    say "Finding the newest version..."
-    TAGS="$(curl -fsSL --max-time 60 "https://api.github.com/repos/$REPOSITORY/tags?per_page=100")" \
-      || fail "Could not reach GitHub. Check the internet connection and try again."
-    VERSION="$(printf '%s' "$TAGS" | python3 -c '
-import json, re, sys
-found = []
-for tag in json.load(sys.stdin):
-    match = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", tag.get("name", ""))
-    if match:
-        found.append(tuple(int(part) for part in match.groups()))
-print("%d.%d.%d" % max(found) if found else "")
-')"
-    [ -n "$VERSION" ] || fail "No published version was found yet."
-    say "Downloading version $VERSION..."
-    ZIP_URL="https://github.com/$REPOSITORY/archive/refs/tags/v$VERSION.zip"
+    say "Downloading the newest version..."
+    ZIP_URL="https://github.com/$REPOSITORY/archive/refs/heads/main.zip"
   fi
   curl -fsSL --max-time 120 -o "$WORK/download.zip" "$ZIP_URL" || fail "The download failed. Check the internet connection and try again."
   unzip -q "$WORK/download.zip" -d "$WORK/unpacked" || fail "The download could not be unpacked."

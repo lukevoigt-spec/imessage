@@ -6,7 +6,6 @@ installer runs inside a pretend home folder so it cannot touch the real one.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import plistlib
@@ -32,7 +31,7 @@ HAVE_SHELL_TOOLS = all(shutil.which(tool) for tool in ("bash", "curl", "unzip"))
 
 def make_release(destination: Path, version: str, leave_out=(), extra=None) -> Path:
     """Build a zip laid out the way GitHub lays out a published version: one top folder holding the code."""
-    top = "imessage-%s" % version
+    top = "imessage-main"
     with zipfile.ZipFile(str(destination), "w") as bundle:
         for name in ["imessage_explorer.py", "install.sh", "README.md"]:
             bundle.write(str(ROOT / name), "%s/%s" % (top, name))
@@ -58,22 +57,25 @@ class VersionTests(unittest.TestCase):
         self.assertIsNone(update.parse_version("main"))
         self.assertIsNone(update.parse_version("v1.2"))
 
-    def test_newest_version_ignores_tags_that_are_not_versions(self):
-        tags = [{"name": "v0.3.1"}, {"name": "v0.10.0"}, {"name": "experiment"}, {"name": "v0.9.2"}]
-        self.assertEqual(update.newest_version(lambda _url: json.dumps(tags).encode()), "0.10.0")
-        self.assertIsNone(update.newest_version(lambda _url: b"[]"))
+    def test_newest_version_is_read_from_the_published_code(self):
+        self.assertEqual(update.newest_version(lambda _url: b'"""About."""\n__version__ = "0.10.0"\n'), "0.10.0")
 
     def test_unreadable_reply_is_a_plain_error(self):
-        with self.assertRaises(update.UpdateError):
-            update.newest_version(lambda _url: b"<html>not json</html>")
+        for reply in (b"<html>not the file</html>", b'__version__ = "main"', b""):
+            with self.assertRaises(update.UpdateError):
+                update.newest_version(lambda _url, reply=reply: reply)
 
     def test_check_reports_whether_an_update_exists(self):
-        newer = "%d.%d.%d" % (update.parse_version(__version__)[0], update.parse_version(__version__)[1] + 1, 0)
-        found = update.check(lambda _url: json.dumps([{"name": "v" + newer}]).encode())
+        major, minor, _patch = update.parse_version(__version__)
+        newer = "%d.%d.0" % (major, minor + 1)
+        found = update.check(lambda _url: ('__version__ = "%s"' % newer).encode())
         self.assertTrue(found["update_available"])
         self.assertEqual(found["latest"], newer)
-        same = update.check(lambda _url: json.dumps([{"name": "v" + __version__}]).encode())
+        same = update.check(lambda _url: ('__version__ = "%s"' % __version__).encode())
         self.assertFalse(same["update_available"])
+        # An older published version is never offered as an update.
+        older = update.check(lambda _url: b'__version__ = "0.0.1"')
+        self.assertFalse(older["update_available"])
 
 
 class ApplyTests(unittest.TestCase):
@@ -237,8 +239,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$url" in
-  *api.github.com*tags*) cat "$IMX_FAKE_GITHUB/tags.json";;
-  *archive/refs/tags/*) cp "$IMX_FAKE_GITHUB/release.zip" "$out";;
+  *raw.githubusercontent.com*__init__.py) cat "$IMX_FAKE_GITHUB/version.txt";;
+  *archive/refs/heads/main.zip) cp "$IMX_FAKE_GITHUB/release.zip" "$out";;
   *) echo "unexpected address: $url" >&2; exit 22;;
 esac
 '''
@@ -291,7 +293,7 @@ class EndToEndUpdateTests(unittest.TestCase):
         code = home / "Library" / "Application Support" / "iMessage Explorer" / "app"
 
         make_release(fake / "release.zip", "9.9.9")
-        (fake / "tags.json").write_text(json.dumps([{"name": "v" + __version__}, {"name": "v9.9.9"}]))
+        (fake / "version.txt").write_text('__version__ = "9.9.9"\n')
         curl = self.tmp / "bin" / "curl"
         curl.write_text(FAKE_CURL)
         curl.chmod(0o755)

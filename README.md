@@ -68,7 +68,7 @@ Home asks you to pin your inner circle the first time. Labels and pins are kept 
 - Your searchable copy is stored in `~/.imessage-explorer`, **outside this folder**, so message data cannot be committed to GitHub by accident.
 - The interface is reachable only from this Mac, and only by the browser tab the tool opens.
 - Message text leaves the Mac in exactly two cases: you confirm an **Ask AI** request, or an AI tool **you connected** runs a search. Both are listed, without the message text, on the Setup screen.
-- The only other time the app uses the internet is when you press **Check for a newer version** or **Update the app**. That asks GitHub which versions exist and downloads the code. Nothing about you or your messages is sent.
+- The only other time the app uses the internet is when you press **Check for a newer version** or **Update the app**. That asks GitHub which version is published and downloads the code. Nothing about you or your messages is sent.
 - Your messages include other people's words. Sharing them with an AI service shares their words too.
 
 ### The summary after bringing in messages
@@ -161,5 +161,5 @@ To try the app on made-up data without touching real messages, run `python3 test
 
 - Code is in `imx/`. No third-party packages except the optional `anthropic`.
 - Tests: `python3 -m unittest discover -s tests`. They use only fictional data and never contact Anthropic.
-- A published version is a tag such as `v0.3.1`. The app only ever installs tagged versions. `imx/update.py` explains how.
+- The `main` branch is the published version: the installer and the in-app update both install it. Do unfinished work on another branch, and raise the version number in `imx/__init__.py` when publishing. `imx/update.py` explains how updating works.
 - The sentiment word list in `imx/data/vader_lexicon.txt` comes from VADER 3.3.2 by C.J. Hutto and Eric Gilbert, used under the MIT licence in `imx/data/VADER_LICENSE.txt`.
