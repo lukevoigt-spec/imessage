@@ -105,8 +105,13 @@ def fits(kind: str, purpose: str, cap_usd: float, items: List[Dict[str, object]]
 
 
 def submit(kind: str, items: List[Dict[str, object]], create: Callable = claude_api.batch_create,
-           say: Callable[[str], None] = lambda _text: None) -> int:
-    """Send items as batches. Each item has `custom_id`, `params`, `note` (a dict) and `estimate_usd`."""
+           say: Callable[[str], None] = lambda _text: None, call_off: Callable = claude_api.batch_cancel) -> int:
+    """Send items as batches. Each item has `custom_id`, `params`, `note` (a dict) and `estimate_usd`.
+
+    A batch that was sent but could not be written down is called off and the job stops. Otherwise the
+    next round would send the same requests again, and the cap, which counts what is written down,
+    would not see either copy.
+    """
     waiting = list(items)
     sent = 0
     while waiting:
@@ -123,19 +128,30 @@ def submit(kind: str, items: List[Dict[str, object]], create: Callable = claude_
         batch_id = str(batch.get("id") or "")
         if not batch_id:
             raise AIError("Anthropic accepted a batch but gave it no id.")
-        with reading._store_lock:
-            conn = store()
+        try:
+            with reading._store_lock:
+                conn = store()
+                try:
+                    conn.execute("INSERT INTO job_batch (id, kind, created_at, status, requests) VALUES (?, ?, ?, 'in_progress', ?)",
+                                 (batch_id, kind, reading._now(), len(chunk)))
+                    for item in chunk:
+                        conn.execute("INSERT INTO job_item (custom_id, kind, batch_id, note, estimate_usd, attempts) VALUES (?, ?, ?, ?, ?, 1) "
+                                     "ON CONFLICT (custom_id) DO UPDATE SET batch_id = excluded.batch_id, note = excluded.note, "
+                                     "estimate_usd = excluded.estimate_usd, attempts = attempts + 1",
+                                     (item["custom_id"], kind, batch_id, json.dumps(item["note"], ensure_ascii=False), item["estimate_usd"]))
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as exc:
+            called_off = True
             try:
-                conn.execute("INSERT INTO job_batch (id, kind, created_at, status, requests) VALUES (?, ?, ?, 'in_progress', ?)",
-                             (batch_id, kind, reading._now(), len(chunk)))
-                for item in chunk:
-                    conn.execute("INSERT INTO job_item (custom_id, kind, batch_id, note, estimate_usd, attempts) VALUES (?, ?, ?, ?, ?, 1) "
-                                 "ON CONFLICT (custom_id) DO UPDATE SET batch_id = excluded.batch_id, note = excluded.note, "
-                                 "estimate_usd = excluded.estimate_usd, attempts = attempts + 1",
-                                 (item["custom_id"], kind, batch_id, json.dumps(item["note"], ensure_ascii=False), item["estimate_usd"]))
-                conn.commit()
-            finally:
-                conn.close()
+                call_off(batch_id)
+            except Exception:
+                called_off = False
+            raise AIError("A batch of %d requests was sent but could not be written down on this Mac (%s). %s Nothing more was sent. "
+                          "Check that the disk is not full and that only one copy of the app is open, then start again."
+                          % (len(chunk), exc, "It was called off, so at most a small part of it is charged." if called_off
+                             else "It could not be called off either, so it may be charged: batch %s." % batch_id), retryable=False)
         sent += len(chunk)
     return sent
 

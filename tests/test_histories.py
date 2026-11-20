@@ -396,5 +396,49 @@ class LockingTests(unittest.TestCase):
                             self.assertNotIn(called, takers, "%s line %d calls %s() while holding the store lock" % (name, inner.lineno, called))
 
 
+class LostBatchTests(unittest.TestCase):
+    """A batch that is sent but cannot be written down must not be sent again."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.old = os.environ.get("IMX_DATA_DIR")
+        os.environ["IMX_DATA_DIR"] = self.tmp
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("IMX_DATA_DIR", None)
+        else:
+            os.environ["IMX_DATA_DIR"] = self.old
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_batch_that_cannot_be_recorded_is_called_off_and_the_job_stops(self):
+        from imx import jobs
+        from imx.claude_api import AIError
+        item = lambda n: {"custom_id": "x-%d" % n, "params": {"model": "m", "messages": []}, "note": {}, "estimate_usd": 0.01}
+        made, called_off = [], []
+        def create(requests):
+            made.append(len(requests))
+            return {"id": "msgbatch_same"}                      # the same id twice: the second cannot be written down
+        self.assertEqual(jobs.submit("history", [item(1)], create=create, call_off=called_off.append), 1)
+        with self.assertRaises(AIError) as caught:
+            jobs.submit("history", [item(2), item(3)], create=create, call_off=called_off.append)
+        self.assertFalse(caught.exception.retryable)             # the runner stops instead of sending it again
+        self.assertIn("called off", str(caught.exception))
+        self.assertEqual(called_off, ["msgbatch_same"])
+        self.assertEqual(made, [1, 2])
+        self.assertEqual(jobs.items_out("history"), 1)           # only the batch that was written down counts as out
+
+    def test_it_says_so_when_the_batch_could_not_be_called_off(self):
+        from imx import jobs
+        from imx.claude_api import AIError
+        item = {"custom_id": "y-1", "params": {"model": "m", "messages": []}, "note": {}, "estimate_usd": 0.01}
+        def refuse(_batch_id):
+            raise AIError("no network")
+        jobs.submit("history", [item], create=lambda r: {"id": "msgbatch_dup"}, call_off=lambda b: None)
+        with self.assertRaises(AIError) as caught:
+            jobs.submit("history", [dict(item, custom_id="y-2")], create=lambda r: {"id": "msgbatch_dup"}, call_off=refuse)
+        self.assertIn("may be charged: batch msgbatch_dup", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
