@@ -38,11 +38,12 @@ curl -fsSL https://raw.githubusercontent.com/lukevoigt-spec/imessage/main/instal
 
 ## Getting around
 
-Seven sections across the top. Explanations of how each number is worked out sit behind a "How this is measured" link, so screens stay easy to scan.
+Eight sections across the top. Explanations of how each number is worked out sit behind a "How this is measured" link, so screens stay easy to scan.
 
 | Section | What is there |
 |---|---|
 | **Home** | Your inner circle, what has changed lately, and where to go next |
+| **Me** | A portrait of you drawn from everything read so far, ten trait scores as spider charts (overall and per person), charts of how your conversations felt over time, and lines for your memory file |
 | **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume; the automated senders that were set aside |
 | **Search** | Find messages by words, phrases and filters; saved topics |
 | **Patterns** | Over time, replies and read times, reactions, tone, words and phrases, expressions and style, "we" against "I", and what gets shared |
@@ -129,6 +130,19 @@ someone@example.com,Jordan Pike
 ## Reading: have AI read your conversations (optional)
 
 Counting cannot tell you what a conversation was about, how it felt, or what was left unresolved. Reading can. The **Reading** section does it in three layers: a digest of every stretch of conversation (the full read), a check of how accurate those digests are, and a history of each relationship written from them.
+
+### Me: a portrait of you
+
+Everything read so far, turned towards one question: who are you, as your messages show it? It lives in its own **Me** section and is written by Claude Opus in two rounds.
+
+- **Round one.** Notes on each year from every digest, across everyone you talked to. Notes on your own sent messages, year by year, for your voice and values, with quotes. And for each person who has a history, a score on ten traits for how you show up with them.
+- **Round two.** The portrait itself: who you are, your roles, what you evidently care about, how you communicate, what you do under pressure, strengths, blind spots, contradictions, how you have changed, and questions only you can answer.
+- **Quotes are checked.** Every quote attributed to you is looked up, word for word, among the messages you actually sent. One that cannot be found is marked, because a model can paraphrase or invent.
+- **Traits.** Ten traits chosen for what messages can show: warmth, reliability, initiative, directness, humour, openness about feelings, handling conflict, generosity, curiosity about others, follow-through. Each score from 0 to 10 comes with a reason and a confidence level, and is grounded in numbers the app measured itself (who starts conversations, reply times, whose questions go unanswered). A score is a judgement with a reason attached, not a measurement. There is a spider chart for you overall and one per person, with the same scores as a table.
+- **Over time.** Charts counted straight from the digests at no cost: how your conversations felt year by year and person by person, friction and how it ended, promises made, and the topics, people and places that come up.
+- **For your memory file.** Short first-person statements about you and each key relationship, for an assistant's long-term memory. You read each one, edit it until it is true, and tick it. Only ticked lines are ever copied, and the app sends them nowhere: you paste them where you want them. A memory file is read by every assistant connected to it, so tick a line about another person only if you are content for those services to hold it.
+- **What it cannot know.** It is three steps from the messages and can only describe what was texted.
+- **The caps.** $80 for the portrait, and $300 for the whole project across every kind of reading.
 
 ### Histories
 

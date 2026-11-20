@@ -52,6 +52,7 @@ REQUIRED_FILES = [
     "imx/jobs.py",
     "imx/check.py",
     "imx/histories.py",
+    "imx/portrait.py",
     "imx/reading.py",
     "imx/data/vader_lexicon.txt",
     "imx/data/VADER_LICENSE.txt",

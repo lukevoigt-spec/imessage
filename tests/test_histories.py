@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 from test_fullread import AVERY, GROUP, JORDAN, FakeAnthropic, build  # noqa: E402
 from test_reading import GOOD_DIGEST, conversation  # noqa: E402
-from imx import check, claude_api, fullread, histories, index, jobs, labels, reading, server  # noqa: E402
+from imx import check, claude_api, fullread, histories, index, jobs, labels, portrait, reading, server  # noqa: E402
 from imx.query import QueryError  # noqa: E402
 
 
@@ -87,6 +87,8 @@ class Base(unittest.TestCase):
     Group "Lake Weekend": 12 messages.                                                                      -> 1 digest
     """
 
+    fake_class = None            # set below, once Fake is defined; subclasses may use their own stand-in
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix="imx-history-test-"))
@@ -106,11 +108,11 @@ class Base(unittest.TestCase):
         for name in ("reading.db", "people.json"):
             if (self.tmp / "data" / name).exists():
                 (self.tmp / "data" / name).unlink()
-        self.fake = Fake()
+        self.fake = (self.fake_class or Fake)()
         claude_api._curl = self.fake
         self.conn = index.connect(readonly=True)
         # Rounds are driven by hand here, so the background threads stay off.
-        self.saved = [(job.runner, job.runner.ensure_running) for job in (fullread, check, histories)]
+        self.saved = [(job.runner, job.runner.ensure_running) for job in (fullread, check, histories, portrait)]
         for runner, _ in self.saved:
             runner.ensure_running = lambda: None
         # The full read comes first, as it does for the user.

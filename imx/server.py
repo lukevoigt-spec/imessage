@@ -22,7 +22,7 @@ from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from . import (__version__, activity, ai, check, claude_api, extract, fullread, histories, index, insights, junk, labels, paths,
-               query, reading,
+               portrait, query, reading,
                science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
@@ -252,6 +252,12 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/reading/status": lambda conn, p: reading.status(),
     "/api/reading/results": lambda conn, p: reading.results(conn),
     "/api/reading/report": lambda conn, p: reading.pilot_report(conn),
+    "/api/me": lambda conn, p: dict(portrait.read(), status=portrait.status()),
+    "/api/me/plan": lambda conn, p: _without(portrait.plan(conn), "_ready"),
+    "/api/me/status": lambda conn, p: portrait.status(),
+    "/api/me/charts": lambda conn, p: portrait.charts(p.get("name", ""), p.get("group") == "1"),
+    "/api/me/brain": lambda conn, p: portrait.brain_lines(),
+    "/api/me/brain/export": lambda conn, p: portrait.brain_export(),
     "/api/check/plan": lambda conn, p: _without(check.plan(conn, int(p.get("size") or check.SAMPLE)), "_items"),
     "/api/check/status": lambda conn, p: check.status(),
     "/api/check/summary": lambda conn, p: check.summary(),
@@ -365,6 +371,16 @@ def _confirmed(body: dict) -> None:
         raise QueryError("Confirm the preview before sending anything to the AI.")
 
 
+def _portrait_start(conn, body) -> dict:
+    _confirmed(body)
+    return portrait.start(conn)
+
+
+def _save_brain_line(conn, body) -> dict:
+    return portrait.save_brain_line(int(body.get("id") or 0), body.get("text") if isinstance(body.get("text"), str) else None,
+                                    body.get("confirmed") if isinstance(body.get("confirmed"), bool) else None)
+
+
 def _check_start(conn, body) -> dict:
     _confirmed(body)
     return check.start(conn, int(body.get("size") or check.SAMPLE))
@@ -397,6 +413,10 @@ def _save_key(conn, body) -> dict:
 
 POST_ROUTES: Dict[str, Callable] = {
     "/api/junk/change": _junk_change,
+    "/api/me/start": _portrait_start,
+    "/api/me/stop": lambda conn, b: portrait.stop(),
+    "/api/me/forget": lambda conn, b: portrait.forget(bool(b.get("everything"))),
+    "/api/me/brain/save": _save_brain_line,
     "/api/check/start": _check_start,
     "/api/check/stop": lambda conn, b: check.stop(),
     "/api/histories/start": _histories_start,
@@ -442,7 +462,7 @@ def serve(port: int = 8765, open_browser: bool = True) -> str:
     print("Leave this window open while you use it. To stop, use Quit on the Setup screen or close this window.")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    for job in (fullread, check, histories):
+    for job in (fullread, check, histories, portrait):
         job.resume_if_needed()       # carry on with anything that was under way when the app was last closed
     try:
         httpd.serve_forever()

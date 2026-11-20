@@ -536,7 +536,7 @@ async function renderConnect() {
       meta.activity.length ? h("div", { class: "scroll" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "When" }), h("th", { text: "What" }), h("th", { class: "n", text: "Messages" }), h("th", { text: "Conversations" }))),
         h("tbody", {}, meta.activity.map((e) => h("tr", {}, h("td", { text: e.when }),
-          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : e.kind === "full_read" ? "Full read" : e.kind === "accuracy_check" ? "Accuracy check" : e.kind === "histories" ? "Histories (digests only)" : "Find topics" }),
+          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : e.kind === "full_read" ? "Full read" : e.kind === "accuracy_check" ? "Accuracy check" : e.kind === "histories" ? "Histories (digests only)" : e.kind === "portrait" ? "Portrait (digests and your own messages)" : "Find topics" }),
           h("td", { class: "n", text: fmt(e.messages_sent !== undefined ? e.messages_sent : e.messages_returned) }),
           h("td", { text: (e.conversations || []).join(", ") }))))))
         : h("p", { class: "muted", text: "Nothing yet. Every AI request and connected-tool search will be listed here, without the message text." })),
@@ -559,6 +559,7 @@ async function renderConnect() {
 /* Six sections. Each holds one or more screens. */
 const NAV = [
   { id: "home", label: "Home", screens: [["home", "Home"]] },
+  { id: "me", label: "Me", screens: [["me", "Portrait"], ["traits", "Traits"], ["mecharts", "Over time"], ["brain", "For brain"]] },
   { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"], ["hidden", "Hidden senders"]] },
   { id: "search", label: "Search", screens: [["search", "Search"], ["topics", "Topics"]] },
   { id: "patterns", label: "Patterns", screens: [["trends", "Over time"], ["replies", "Replies"], ["reactions", "Reactions"], ["tone", "Tone"], ["words", "Words"], ["expressions", "Expressions"], ["language", "We and I"], ["sharing", "Sharing"]] },
@@ -567,7 +568,7 @@ const NAV = [
   { id: "setup", label: "Setup", screens: [["connect", "Setup"]] },
 ];
 /* Screens that always use your whole history, so the filter bar is hidden on them. */
-const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests", "histories", "accuracy"]);
+const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests", "histories", "accuracy", "me", "traits", "mecharts", "brain"]);
 const lastScreen = {};
 const SCREENS = {};
 
@@ -824,6 +825,7 @@ async function renderHome() {
       h("div", { class: "row" },
         h("button", { text: "Find a message", onclick: () => setTab("search") }), h("button", { text: "See your people", onclick: () => setTab("ranking") }),
         h("button", { text: "Open someone's profile", onclick: () => { state.person = ""; setTab("profile"); } }), h("button", { text: "Explore patterns", onclick: () => setTab("trends") }),
+        h("button", { text: "See your portrait", onclick: () => setTab("me") }),
         h("button", { text: "Read your relationship histories", onclick: () => setTab("histories") }),
         h("button", { text: "Ask AI a question", onclick: () => setTab("ask") })),
       h("p", { class: "muted small", text: "Last updated " + (d.import.finished_at || "never") + ". Press Update messages at the top right to bring in new ones." })));
@@ -1705,6 +1707,369 @@ async function renderAccuracy() {
     results, flagged);
 }
 
+/* ---------- Me: a portrait drawn from everything read so far ---------- */
+
+const meView = { timer: null, chartPerson: "" };
+
+/* One small floating label, shared by every chart. Shown beside the mark being pointed at. */
+function hoverTip(node, text) {
+  node.addEventListener("mouseenter", (event) => {
+    let tip = document.getElementById("viz-tip");
+    if (!tip) { tip = h("div", { id: "viz-tip", role: "tooltip" }); document.body.append(tip); }
+    tip.textContent = text;
+    tip.hidden = false;
+    tip.style.left = Math.min(window.innerWidth - 280, event.clientX + 12) + "px";
+    tip.style.top = (event.clientY + 14) + "px";
+  });
+  node.addEventListener("mouseleave", () => { const tip = document.getElementById("viz-tip"); if (tip) tip.hidden = true; });
+  node.setAttribute("tabindex", "0");
+  node.setAttribute("aria-label", text);
+  return node;
+}
+
+/* One-word names for the small charts, where the full names would collide. */
+const SHORT_TRAITS = { warmth: "Warmth", reliability: "Reliable", initiative: "Initiates", directness: "Direct", humour: "Humour",
+  openness: "Open", conflict: "Conflict", generosity: "Generous", curiosity: "Curious", follow_through: "Follows up" };
+
+/* A spider chart of trait scores, 0 at the centre and 10 at the rim. One series only: the list beside it carries the detail. */
+function radar(names, traits, size, compact) {
+  const byKey = Object.fromEntries(traits.map((t) => [t.trait, t]));
+  const pad = compact ? 40 : 92, radius = size / 2 - pad, centre = size / 2;
+  const at = (i, value) => {
+    const angle = -Math.PI / 2 + (2 * Math.PI * i) / names.length;
+    return [centre + Math.cos(angle) * radius * value / 10, centre + Math.sin(angle) * radius * value / 10];
+  };
+  const root = svg("svg", { viewBox: "0 0 " + size + " " + size, width: size, height: size, class: "radar", role: "img",
+    "aria-label": "Spider chart of trait scores: " + names.map((n) => n.name + " " + (byKey[n.key] ? byKey[n.key].score : "not scored")).join(", ") });
+  for (const ring of [2, 4, 6, 8, 10]) {
+    root.append(svg("polygon", { class: "radar-ring", points: names.map((_, i) => at(i, ring).join(",")).join(" ") }));
+  }
+  names.forEach((n, i) => {
+    const [x, y] = at(i, 10);
+    root.append(svg("line", { class: "radar-ring", x1: centre, y1: centre, x2: x, y2: y }));
+    const [lx, ly] = at(i, compact ? 11.6 : 11.2);
+    const label = svg("text", { class: "radar-label" + (compact ? " small" : ""), x: lx, y: ly,
+      "text-anchor": Math.abs(lx - centre) < 6 ? "middle" : lx > centre ? "start" : "end", "dominant-baseline": "middle" });
+    label.textContent = compact ? (SHORT_TRAITS[n.key] || n.name) : n.name;
+    root.append(label);
+  });
+  const scored = names.map((n, i) => [i, byKey[n.key]]).filter(([, t]) => t);
+  if (scored.length > 2) root.append(svg("polygon", { class: "radar-area", points: names.map((n, i) => at(i, byKey[n.key] ? byKey[n.key].score : 0).join(",")).join(" ") }));
+  for (const [i, t] of scored) {
+    const [x, y] = at(i, t.score);
+    const dot = svg("circle", { class: "radar-dot" + (t.confidence === "low" ? " unsure" : ""), cx: x, cy: y, r: compact ? 3 : 4.5 });
+    root.append(hoverTip(dot, names[i].name + ": " + t.score + " of 10, " + t.confidence + " confidence. " + t.why));
+  }
+  return root;
+}
+
+/* The same scores as a list: the readable version of the spider chart. */
+function traitList(names, traits) {
+  const byKey = Object.fromEntries(traits.map((t) => [t.trait, t]));
+  return h("div", { class: "trait-list" }, names.map((n) => {
+    const t = byKey[n.key];
+    const fill = h("i", {});
+    if (t) fill.style.width = (t.score * 10) + "%";
+    return h("div", { class: "trait-row" }, h("div", { class: "trait-name" }, h("strong", { text: n.name }), h("span", { class: "small muted", text: n.meaning })),
+      h("div", { class: "trait-meter" }, fill), h("div", { class: "trait-score", text: t ? t.score + " / 10" : "–" }),
+      h("div", { class: "small" }, t ? [h("span", { class: "tag " + t.confidence, text: t.confidence + " confidence" }), " ", t.why] : "Not scored."));
+  }));
+}
+
+function peopleChips(people, known) {
+  if (!people || !people.length) return null;
+  return h("div", { class: "chips" }, people.map((name) => known.includes(name)
+    ? h("button", { type: "button", class: "chip link-chip", text: name, onclick: () => { historyView.name = name; setTab("histories"); } })
+    : h("span", { class: "chip", text: name })));
+}
+
+function quoteList(quotes) {
+  if (!quotes || !quotes.length) return null;
+  return h("div", { class: "panel" }, h("h3", { text: "In your own words" }),
+    h("p", { class: "small muted", text: "Every quote was checked against the messages you actually sent. One marked \"not found\" may be paraphrased or invented by the model: do not rely on it." }),
+    quotes.map((q) => h("div", { class: "claim" },
+      h("blockquote", { class: q.found ? "" : "unverified", text: q.text }),
+      h("p", { class: "small muted" }, (q.to ? "To " + q.to : "") + (q.date ? ", " + q.date : "") + ". " + q.why + " ",
+        q.found ? h("span", { class: "tag high", text: "found word for word" }) : h("span", { class: "tag low", text: "not found word for word" }), " ",
+        q.found ? h("button", { class: "link small", text: "Find it", onclick: () => {
+          state.search.q = "\"" + q.text.replace(/"/g, "") + "\""; state.filters.direction = "sent"; state.filters.contact = ""; syncFilterInputs(); setTab("search"); } }) : null))));
+}
+
+function meProgress(st) {
+  const busy = st.active || st.being_written > 0;
+  // Once it has finished cleanly there is nothing to report: the portrait itself is the result.
+  if (!busy && !st.problem && !st.problems.length && (!st.ended || st.ended === "finished")) return null;
+  const headline = busy ? "Writing your portrait" : st.ended === "finished" ? "Portrait finished" : st.ended === "stopped at the cap" ? "Stopped at the spending cap"
+    : st.ended === "stopped by you" ? "Stopped" : "Stopped by a problem";
+  return h("div", { class: "panel" }, h("h2", { text: headline }),
+    h("div", { class: "cards" }, card(fmt(st.year_notes), "notes on each period"), card(fmt(st.voice_notes), "notes on your own messages"),
+      card(fmt(st.trait_scores), "people scored"), card(fmt(st.being_written), "being written now"), card(usd(st.spent_usd) + " of " + usd(st.cap_usd), "spent on the portrait")),
+    busy && st.stage ? h("p", {}, h("strong", { text: "Right now: " }), st.stage + ".") : null,
+    busy ? h("p", { class: "small muted", text: "It comes back in two rounds: the notes first, then the portrait and the brain lines written from them. Each round usually takes under an hour. You can quit the app; open it again later and it carries on." }) : null,
+    st.problem ? h("div", { class: "notice" }, h("strong", { text: "Problem: " }), st.problem) : null,
+    st.problems.length ? h("p", { class: "small muted", text: "Not written: " + st.problems.map((p) => p.problem.replace("portrait: ", "") + " (" + p.times + ")").join("; ") + "." }) : null,
+    busy ? h("button", { text: "Stop", onclick: async () => { await post("/api/me/stop", {}); renderMe(); } }) : null);
+}
+
+async function renderMe() {
+  clearTimeout(meView.timer);
+  loading();
+  const d = await request("/api/me");
+  const st = d.status;
+  if (!st.key.key_found) { show(keyPanel(renderMe)); return; }
+  const busy = st.active || st.being_written > 0;
+  if (busy) {
+    show(meProgress(st));
+    meView.timer = setTimeout(() => { if (state.tab === "me") renderMe().catch(() => {}); }, 5000);
+    return;
+  }
+  if (!d.portrait) {
+    const plan = await request("/api/me/plan");
+    const out = h("div", {});
+    const begin = async (button) => {
+      button.disabled = true;
+      try { await post("/api/me/start", { confirm: true }); renderMe(); }
+      catch (error) { button.disabled = false; out.replaceChildren(h("p", { class: "error", text: error.message })); }
+    };
+    const work = (label, part) => h("tr", {}, h("td", { text: label }), h("td", { class: "n", text: fmt(part.done) }), h("td", { class: "n", text: fmt(part.to_do) }));
+    show(meProgress(st),
+      h("div", { class: "panel" }, h("h2", { text: "A portrait of you" }),
+        h("p", { text: "Everything read so far, turned towards one question: who are you, as your messages show it? " + plan.writer + " reads every digest year by year across everyone you talked to, reads your own sent messages for your voice and values, scores how you show up with each person who has a history, and then writes the portrait from all of it." }),
+        plan.digests ? null : h("div", { class: "notice", text: "There are no digests yet. Run the full read first." }),
+        plan.digests && !plan.histories ? h("div", { class: "notice" }, "No relationship histories have been written yet. The portrait is much better with them. ",
+          h("button", { class: "link", text: "Write histories first", onclick: () => setTab("histories") })) : null,
+        h("div", { class: "scroll" }, h("table", {},
+          h("thead", {}, h("tr", {}, h("th", { text: "Round one" }), h("th", { class: "n", text: "Already written" }), h("th", { class: "n", text: "To write" }))),
+          h("tbody", {}, work("Notes on each period, from every digest", plan.year_notes), work("Notes on your own sent messages", plan.voice_notes),
+            work("Trait scores, one per person with a history", plan.trait_scores)))),
+        h("p", { class: "small muted", text: "Round two: the portrait itself, and the lines offered for your memory file." }),
+        h("h3", { text: "This is what would leave your Mac" }),
+        h("p", {}, h("strong", { text: fmt(plan.digests) + " digests" }), ", the " + fmt(plan.histories) + " relationship histories, and ",
+          h("strong", { text: fmt(plan.sent_messages) + " messages you sent" }), " (your own words only, which were already sent once for the full read) would be sent to Anthropic. Estimated cost: ",
+          h("strong", { text: usd(plan.estimated_cost_usd) }), ". Spent on the portrait so far: " + usd(plan.spent_usd) + ". Cap: " + usd(plan.cap_usd) + "."),
+        h("p", { class: "small muted", text: "The whole project has spent " + usd(plan.project_spent_usd) + " of its " + usd(plan.project_cap_usd) + " budget, and the portrait will not take it past that." }),
+        plan.requests ? h("button", { class: "primary", text: "Write the portrait", disabled: plan.remaining_usd <= 0 || !plan.digests, onclick: (event) => begin(event.currentTarget) }) : null,
+        out));
+    return;
+  }
+  const g = d.portrait, known = d.history_names;
+  const items = (title, list, render) => list && list.length ? h("div", { class: "panel" }, h("h3", { text: title }), list.map((item) => h("div", { class: "claim" }, render(item)))) : null;
+  show(meProgress(st),
+    h("div", { class: "panel" }, h("h2", { text: "You, as your messages show it" }), h("p", { class: "lead", text: g.headline }), h("p", { text: g.in_brief }),
+      h("p", { class: "small muted", text: "Written by " + d.written_by + " on " + d.written_at + " from " + fmt(known.length) + " relationship histories, " + fmt(d.years.length) +
+        " sets of notes on your digests and " + fmt(d.voices.length) + " on your own messages. It is a model's reading, three steps from what was said, and it can only describe what was texted." }),
+      h("div", { class: "row" }, h("button", { text: "Trait scores", onclick: () => setTab("traits") }), h("button", { text: "Over time", onclick: () => setTab("mecharts") }),
+        h("button", { text: "Lines for your memory file", onclick: () => setTab("brain") }))),
+    items("Who you are", g.who_you_are, (w) => [h("h4", { text: w.title }), h("p", { text: w.text }), peopleChips(w.people, known),
+      w.years.length ? h("p", { class: "small muted", text: "Years: " + w.years.join(", ") }) : null]),
+    items("In each role", g.roles, (r) => [h("h4", { text: r.role }), h("p", { text: r.text }), peopleChips(r.people, known)]),
+    items("What you evidently care about", g.values, (v) => [h("h4", { text: v.value }), h("p", { text: v.text }), peopleChips(v.people, known)]),
+    h("div", { class: "panel" }, h("div", { class: "pair" },
+      h("div", {}, h("h3", { text: "How you communicate" }), h("p", { text: g.how_you_communicate })),
+      h("div", {}, h("h3", { text: "Under pressure" }), h("p", { text: g.under_pressure })))),
+    items("Strengths", g.strengths, (s) => [h("h4", { text: s.what }), h("p", { text: s.text }), peopleChips(s.people, known)]),
+    items("Blind spots", g.blind_spots, (s) => [h("h4", { text: s.what }), h("p", { text: s.text }), peopleChips(s.people, known)]),
+    items("Contradictions", g.contradictions, (c) => [h("h4", { text: c.what }), h("p", { text: c.text })]),
+    items("How you have changed", g.how_you_have_changed, (c) => [h("h4", { text: c.period }), h("p", { text: c.text })]),
+    h("div", { class: "panel" }, h("div", { class: "pair" },
+      h("div", {}, h("h3", { text: "What people get from you" }), h("p", { text: g.what_people_get_from_you })),
+      h("div", {}, h("h3", { text: "What you ask of people" }), h("p", { text: g.what_you_ask_of_people })))),
+    quoteList(g.quotes),
+    g.questions_worth_asking.length ? h("div", { class: "panel" }, h("h3", { text: "Questions only you can answer" }), h("ul", {}, g.questions_worth_asking.map((q) => h("li", { text: q })))) : null,
+    h("div", { class: "panel" }, h("h3", { text: "What the messages cannot show" }), h("p", { text: g.what_messages_cannot_show }),
+      h("div", { class: "spacer" }),
+      h("button", { class: "quiet", text: "Throw the portrait away so it can be written again", onclick: async () => {
+        if (!window.confirm("Throw away the portrait and the lines for your memory file? Writing them again costs again. The notes they were written from are kept.")) return;
+        await post("/api/me/forget", {});
+        renderMe();
+      } })));
+}
+
+async function renderTraits() {
+  loading();
+  const d = await request("/api/me");
+  if (!d.portrait && !d.per_person.length) {
+    show(h("div", { class: "panel" }, h("h2", { text: "No trait scores yet" }), h("p", { text: "They are written with the portrait." }),
+      h("button", { class: "primary", text: "Go to the portrait", onclick: () => setTab("me") })));
+    return;
+  }
+  const names = d.trait_names;
+  const band = (score) => "heat-" + Math.min(5, Math.floor(score / 2));
+  show(
+    d.portrait ? h("div", { class: "panel" }, h("h2", { text: "How you show up, across everyone" }),
+      definition("Each score from 0 to 10 is a judgement by " + d.written_by + ", made from the relationship histories, the notes on every period, the notes on your own messages, and numbers the app measured itself (who starts conversations, how fast each of you replies, whose questions go unanswered). 5 is unremarkable. A score is a reading with a reason attached, not a measurement, and low confidence means the messages gave little to go on. Hollow dots mark low confidence."),
+      h("div", { class: "radar-with-list" }, radar(names, d.portrait.traits, 420, false), traitList(names, d.portrait.traits))) : null,
+    d.per_person.length ? h("div", { class: "panel" }, h("h2", { text: "How you differ from person to person" }),
+      h("p", { class: "small muted", text: "One chart per person who has a history, on the same scale. Point at a dot for the reason behind a score." }),
+      h("div", { class: "radar-grid" }, d.per_person.map((p) => h("div", { class: "radar-cell" },
+        h("button", { type: "button", class: "link", text: p.name, onclick: () => { historyView.name = p.name; setTab("histories"); } }),
+        radar(names, p.traits, 230, true), h("p", { class: "small muted", text: p.in_a_sentence })))),
+      h("h3", { text: "The same scores as a table" }),
+      h("div", { class: "scroll" }, h("table", { class: "heat-table" },
+        h("thead", {}, h("tr", {}, h("th", { text: "With" }), names.map((n) => h("th", { class: "n", text: n.name })))),
+        h("tbody", {}, d.per_person.map((p) => {
+          const byKey = Object.fromEntries(p.traits.map((t) => [t.trait, t]));
+          return h("tr", {}, h("td", { text: p.name }), names.map((n) => {
+            const t = byKey[n.key];
+            return t ? hoverTip(h("td", { class: "n heat " + band(t.score), text: String(t.score) }), n.name + " with " + p.name + ": " + t.score + " of 10, " + t.confidence + " confidence. " + t.why)
+              : h("td", { class: "n muted", text: "–" });
+          }));
+        }))))) : null);
+}
+
+/* ---------- Over time: charts counted straight from the digests ---------- */
+
+const FEEL_NAMES = { warm: "Warm", friendly: "Friendly", neutral: "Neutral", mixed: "Mixed", cool: "Cool", tense: "Tense", hostile: "Hostile" };
+
+function swatches(entries) {
+  return h("div", { class: "legend" }, entries.map(([cls, label]) => h("span", {}, h("i", { class: "swatch " + cls }), label)));
+}
+
+/* Share of messages by how the conversation felt, one row each, lined up on the middle of "neutral". */
+function feelBars(rows, labelOf) {
+  const cold = ["hostile", "tense", "cool"], middle = ["mixed", "neutral"], warmSide = ["friendly", "warm"];
+  const shaped = rows.map((row) => {
+    const total = Object.keys(FEEL_NAMES).reduce((sum, key) => sum + row[key], 0) || 1;
+    const share = (keys) => keys.reduce((sum, key) => sum + row[key], 0) / total;
+    return { row, total, left: share(cold) + share(middle) / 2, right: share(warmSide) + share(middle) / 2 };
+  });
+  const maxLeft = Math.max(...shaped.map((s) => s.left), 0.01), maxRight = Math.max(...shaped.map((s) => s.right), 0.01), span = maxLeft + maxRight;
+  return h("div", { class: "feel-chart" }, swatches(["hostile", "tense", "cool", "mixed", "neutral", "friendly", "warm"].map((key) => ["feel-" + key, FEEL_NAMES[key]])),
+    shaped.map((s) => {
+      const spacer = h("div", { class: "feel-spacer" });
+      spacer.style.width = (100 * (maxLeft - s.left) / span) + "%";
+      const track = h("div", { class: "feel-track" }, spacer);
+      for (const key of cold.concat(middle, warmSide)) {
+        if (!s.row[key]) continue;
+        const segment = h("div", { class: "feel-seg feel-" + key });
+        segment.style.width = (100 * s.row[key] / s.total / span) + "%";
+        track.append(hoverTip(segment, labelOf(s.row) + ": " + FEEL_NAMES[key].toLowerCase() + " for " + Math.round(100 * s.row[key] / s.total) + "% of messages (" + fmt(s.row[key]) + ")"));
+      }
+      const centre = h("div", { class: "feel-centre" });       // where the middle of "neutral" falls, the same on every row
+      centre.style.left = (100 * maxLeft / span) + "%";
+      return h("div", { class: "feel-row" }, h("div", { class: "feel-label", text: labelOf(s.row) }), h("div", { class: "feel-wrap" }, track, centre),
+        h("div", { class: "val", text: Math.round(100 * (s.row.warm + s.row.friendly) / s.total) + "% warm" }));
+    }));
+}
+
+/* Columns stacked from a few named parts, one column per year. */
+function stackedColumns(rows, parts) {
+  const most = Math.max(...rows.map((row) => parts.reduce((sum, [key]) => sum + row[key], 0)), 1);
+  return h("div", {}, swatches(parts.map(([key, label, cls]) => [cls, label])),
+    h("div", { class: "stack-chart" }, rows.map((row) => {
+      const total = parts.reduce((sum, [key]) => sum + row[key], 0);
+      const column = h("div", { class: "stack-col" });
+      for (const [key, label, cls] of parts.slice().reverse()) {
+        if (!row[key]) continue;
+        const segment = h("div", { class: "stack-seg " + cls });
+        segment.style.height = (100 * row[key] / most) + "%";
+        column.append(hoverTip(segment, row.year + ": " + fmt(row[key]) + " " + label.toLowerCase()));
+      }
+      return h("div", { class: "stack-slot" }, h("div", { class: "stack-total", text: total ? fmt(total) : "" }), column, h("div", { class: "stack-year", text: row.year }));
+    })));
+}
+
+function rankedBars(items) {
+  const most = Math.max(...items.map((item) => item.count), 1);
+  return h("div", { class: "bars" }, items.map((item) => {
+    const fill = h("div", { class: "bar-sent" });
+    fill.style.width = (100 * item.count / most) + "%";
+    return h("div", { class: "bar-row" }, h("div", { class: "name", text: item.name }), h("div", { class: "bar-track" }, fill), h("div", { class: "val", text: fmt(item.count) }));
+  }));
+}
+
+async function renderMeCharts() {
+  loading();
+  const everyone = await request("/api/me/charts");
+  if (!everyone.digests) {
+    show(h("div", { class: "panel" }, h("h2", { text: "Nothing to chart yet" }), h("p", { text: "These charts are counted from the digests. Run the full read first." }),
+      h("button", { class: "primary", text: "Go to the full read", onclick: () => setTab("full") })));
+    return;
+  }
+  const options = everyone.feel_by_person;
+  const chosen = options.find((p) => p.name === meView.chartPerson);
+  const d = chosen ? await request("/api/me/charts?" + new URLSearchParams({ name: chosen.name, group: chosen.is_group ? "1" : "" }).toString()) : everyone;
+  const who = h("select", { "aria-label": "Whose conversations" }, h("option", { value: "", text: "Everyone" }),
+    options.map((p) => h("option", { value: p.name, text: p.name + (p.is_group ? " (group)" : "") })));
+  who.value = chosen ? chosen.name : "";
+  who.addEventListener("change", () => { meView.chartPerson = who.value; renderMeCharts(); });
+  const scope = chosen ? "with " + chosen.name : "across everyone";
+  show(
+    h("div", { class: "panel" }, h("h2", { text: "Over time" }), definition(d.definition),
+      h("div", { class: "row" }, h("label", {}, "Show ", who), h("span", { class: "small muted", text: fmt(d.digests) + " digests counted. No cost: nothing is sent anywhere." }))),
+    h("div", { class: "panel" }, h("h3", { text: "How your conversations felt, year by year, " + scope }),
+      h("p", { class: "small muted", text: "Share of messages in stretches the model read as cold (left) or warm (right). The rows line up on the middle of neutral." }),
+      feelBars(d.feel_by_year, (row) => row.year)),
+    h("div", { class: "panel" }, h("h3", { text: "Friction, and how it ended, " + scope }),
+      d.friction_by_year.some((row) => d.resolutions.some((key) => row[key]))
+        ? stackedColumns(d.friction_by_year, [["resolved", "Resolved", "res-resolved"], ["partly resolved", "Partly resolved", "res-partly"], ["unresolved", "Unresolved", "res-unresolved"], ["unclear", "Unclear", "res-unclear"]])
+        : h("p", { class: "muted", text: "No friction was recorded in these digests." })),
+    h("div", { class: "panel" }, h("h3", { text: "Promises made, " + scope }),
+      d.promises_by_year.some((row) => row.me || row.them)
+        ? stackedColumns(d.promises_by_year, [["me", "By you", "series-1"], ["them", "By them", "series-2"]])
+        : h("p", { class: "muted", text: "No promises were recorded in these digests." })),
+    chosen ? null : h("div", { class: "panel" }, h("h3", { text: "How it feels, person by person" }),
+      h("p", { class: "small muted", text: "Your twenty busiest conversations, on the same scale." }), feelBars(everyone.feel_by_person, (row) => row.name)),
+    h("div", { class: "panel" }, h("div", { class: "pair" },
+      h("div", {}, h("h3", { text: "What you talk about" }), rankedBars(d.topics.slice(0, 20))),
+      h("div", {}, h("h3", { text: "People who come up" }), d.people.length ? rankedBars(d.people.slice(0, 12)) : h("p", { class: "muted", text: "Nobody recorded." }),
+        h("div", { class: "spacer" }), h("h3", { text: "Places that come up" }), d.places.length ? rankedBars(d.places.slice(0, 12)) : h("p", { class: "muted", text: "None recorded." })))));
+}
+
+/* ---------- For brain: lines you confirm, one by one ---------- */
+
+async function renderBrain() {
+  loading();
+  const d = await request("/api/me/brain");
+  if (!d.total) {
+    show(h("div", { class: "panel" }, h("h2", { text: "No lines yet" }),
+      h("p", { text: "Lines for your memory file are written together with the portrait." }),
+      h("button", { class: "primary", text: "Go to the portrait", onclick: () => setTab("me") })));
+    return;
+  }
+  const counter = h("strong", { text: d.confirmed + " of " + d.total });
+  let confirmed = d.confirmed;
+  const out = h("div", {});
+  const lineNode = (line) => {
+    const tick = h("input", { type: "checkbox", "aria-label": "Confirm this line" });
+    tick.checked = line.confirmed;
+    const text = h("textarea", { rows: "2", "aria-label": "Line" });
+    text.value = line.text;
+    const note = h("span", { class: "small muted", text: line.edited ? "edited by you" : "" });
+    tick.addEventListener("change", async () => {
+      try { await post("/api/me/brain/save", { id: line.id, confirmed: tick.checked }); confirmed += tick.checked ? 1 : -1; counter.textContent = confirmed + " of " + d.total; }
+      catch (error) { tick.checked = !tick.checked; note.textContent = error.message; }
+    });
+    text.addEventListener("change", async () => {
+      try {
+        await post("/api/me/brain/save", { id: line.id, text: text.value });
+        if (tick.checked) { tick.checked = false; confirmed -= 1; counter.textContent = confirmed + " of " + d.total; }
+        note.textContent = "edited by you: tick it again to confirm what it says now";
+      } catch (error) { note.textContent = error.message; }
+    });
+    return h("div", { class: "brain-line" }, tick, h("div", { class: "brain-text" }, text, h("div", {}, h("span", { class: "tag", text: line.kind }), " ", note)));
+  };
+  const copy = async () => {
+    try {
+      const exported = await request("/api/me/brain/export");
+      if (!exported.lines) { out.replaceChildren(h("p", { class: "error", text: "Nothing is ticked yet." })); return; }
+      const box = h("textarea", { class: "report-text", readonly: true, rows: "14", "aria-label": "Confirmed lines" });
+      box.value = exported.text;
+      const status = h("span", { class: "small muted" });
+      try { await navigator.clipboard.writeText(exported.text); status.textContent = "Copied " + exported.lines + " lines. Paste them into your conversation with Claude."; }
+      catch (error) { box.select(); status.textContent = "Select all of the text above and copy it."; }
+      out.replaceChildren(box, status);
+    } catch (error) { out.replaceChildren(h("p", { class: "error", text: error.message })); }
+  };
+  show(
+    h("div", { class: "panel" }, h("h2", { text: "Lines for your memory file" }),
+      h("p", { text: "These are statements about you and your key relationships, written by a model from everything read so far, in your own voice. Read each one. Change the wording until it is true, tick it if you want it remembered, and leave it unticked if not. Only ticked lines are ever copied, and nothing is sent anywhere from this screen." }),
+      h("div", { class: "notice", text: "A memory file is read by every AI assistant you connect to it. Tick a line about another person only if you are content for those services to hold it." }),
+      h("p", {}, "Confirmed so far: ", counter, " lines."),
+      h("div", { class: "row" }, h("button", { class: "primary", text: "Copy the confirmed lines", onclick: copy })), out),
+    d.sections.map((section) => h("div", { class: "panel" }, h("h3", { text: section.name }), section.lines.map(lineNode))));
+}
+
 /* Ready-made questions for the Ask AI screen. */
 const AI_PRESETS = {
   tone: "Describe the emotional tone of these messages and how it changes over time. Point out warm stretches, tense stretches and turning points, with dates. Note what each person tends to bring emotionally. Be candid but fair, and do not speculate beyond what the messages show.",
@@ -1719,6 +2084,7 @@ Object.assign(SCREENS, {
   expressions: renderExpressions, language: renderLanguage, sharing: renderSharing,
   ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(), hidden: renderHidden,
   full: renderFull, digests: renderDigests, histories: renderHistories, accuracy: renderAccuracy,
+  me: renderMe, traits: renderTraits, mecharts: renderMeCharts, brain: renderBrain,
 });
 
 start();
