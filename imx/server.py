@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, activity, ai, claude_api, extract, index, insights, labels, paths, query, reading,
+from . import (__version__, activity, ai, claude_api, extract, index, insights, junk, labels, paths, query, reading,
                science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
@@ -246,6 +246,7 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/circles": lambda conn, p: science.circles(conn),
     "/api/labels": lambda conn, p: {"labels": labels.load(), "choices": list(labels.LABELS)},
     "/api/home": lambda conn, p: _home(conn),
+    "/api/junk": lambda conn, p: junk.report(conn),
     "/api/reading/plan": lambda conn, p: _reading_plan(conn, p),
     "/api/reading/status": lambda conn, p: reading.status(),
     "/api/reading/results": lambda conn, p: reading.results(conn),
@@ -257,6 +258,7 @@ GET_ROUTES: Dict[str, Callable] = {
 def _home(conn) -> dict:
     """Everything the opening screen shows, in one request."""
     ranked = insights.importance(conn)
+    hidden = junk.report(conn)
     return {
         "totals": stats.people(conn, Filters())["totals"],
         "inner_circle": [r for r in ranked["rows"] if r["pinned"]],
@@ -265,12 +267,34 @@ def _home(conn) -> dict:
         "community": insights.community(conn),
         "drift": insights.drift(conn, limit=6),
         "import": index.last_report(conn),
+        "hidden": {"senders": len(hidden["hidden"]), "messages": hidden["hidden_messages"], "suggested": len(hidden["suggested"])},
     }
+
+
+def _relabelled() -> None:
+    """After a label changes: re-mark who is hidden, and forget cached answers worked out before."""
+    junk.refresh()
+    stats._cache.clear()
 
 
 def _save_label(conn, body) -> dict:
     labels.save(str(body.get("name") or ""), str(body.get("label") or ""), bool(body.get("pinned")))
+    _relabelled()
     return {"labels": labels.load()}
+
+
+def _junk_change(conn, body) -> dict:
+    """Hide or restore senders from the Hidden senders screen."""
+    names = [str(name) for name in (body.get("names") or [])][:5000]
+    if not names:
+        raise QueryError("Choose a sender first.")
+    action = labels.hide if body.get("action") == "hide" else labels.keep if body.get("action") == "keep" else None
+    if action is None:
+        raise QueryError("Unknown request.")
+    for name in names:
+        action(name)
+    _relabelled()
+    return {"changed": len(names)}
 
 
 def _ai_args(body: dict) -> tuple:
@@ -320,6 +344,7 @@ def _save_key(conn, body) -> dict:
 
 
 POST_ROUTES: Dict[str, Callable] = {
+    "/api/junk/change": _junk_change,
     "/api/key/save": _save_key,
     "/api/key/check": lambda conn, b: {"models": claude_api.check_models(reading.MODELS)},
     "/api/reading/start": _reading_start,

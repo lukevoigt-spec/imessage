@@ -88,7 +88,8 @@ class CoreTests(unittest.TestCase):
 
     def test_contact_names_and_unknown_numbers(self):
         names = {c["name"] for c in query.contacts(self.conn)}
-        self.assertEqual(names, {"Avery Stone", "Jordan Pike", "Riley Marsh", "Lake Weekend", "+12815550199"})
+        # The unknown number only ever sent a verification code, so it is set aside as automated.
+        self.assertEqual(names, {"Avery Stone", "Jordan Pike", "Riley Marsh", "Lake Weekend"})
 
     def test_attachment_placeholder_removed(self):
         row = self.conn.execute("SELECT text, kind FROM messages WHERE text LIKE '%Cabin photo%'").fetchone()
@@ -152,10 +153,10 @@ class CoreTests(unittest.TestCase):
 
     def test_people_and_volume(self):
         data = stats.people(self.conn, Filters())
-        self.assertEqual(data["totals"]["messages"], 21)        # 22 imported minus 1 tapback
+        self.assertEqual(data["totals"]["messages"], 20)        # 22 imported minus 1 tapback and 1 automated code
         self.assertEqual(data["totals"]["sent"], 6)
-        self.assertEqual(data["totals"]["received"], 15)
-        self.assertEqual(data["totals"]["people"], 4)
+        self.assertEqual(data["totals"]["received"], 14)
+        self.assertEqual(data["totals"]["people"], 3)          # Avery, Jordan and Riley; the code sender is not a person
         self.assertEqual(data["totals"]["groups"], 1)
         top = data["rows"][0]
         self.assertEqual((top["name"], top["total"], top["sent"], top["received"]), ("Avery Stone", 10, 3, 7))
@@ -167,7 +168,7 @@ class CoreTests(unittest.TestCase):
         # Monday 9am hour: four on 3 March (tapback excluded) plus one on Monday 2 June.
         self.assertEqual(data["heatmap"][0][9], 5)
         self.assertEqual(data["busiest_days"][0]["day"], "2025-03-03")
-        self.assertEqual(sum(sum(row) for row in data["heatmap"]), 21)
+        self.assertEqual(sum(sum(row) for row in data["heatmap"]), 20)
 
     def test_response_patterns(self):
         data = stats.response(self.conn, Filters())

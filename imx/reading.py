@@ -261,7 +261,7 @@ def default_people(conn: sqlite3.Connection, year: str) -> List[str]:
     """The people you exchanged the most one-to-one messages with that year, leaving out services."""
     skip = labels.services()
     rows = conn.execute(
-        "SELECT counterpart, COUNT(*) AS n FROM messages WHERE is_group = 0 AND year = ? AND kind != 'reaction' "
+        "SELECT counterpart, COUNT(*) AS n FROM messages WHERE is_group = 0 AND year = ? AND kind != 'reaction' AND junk = 0 "
         "GROUP BY counterpart HAVING SUM(from_me) > 0 ORDER BY n DESC LIMIT 40", (year,)).fetchall()
     return [row["counterpart"] for row in rows if row["counterpart"] not in skip][:PEOPLE_IN_PILOT]
 
@@ -530,7 +530,8 @@ def status() -> Dict[str, object]:
 # ---- results: what it cost, and what it would cost to read everything ------------------------------------
 
 def results(conn: sqlite3.Connection) -> Dict[str, object]:
-    total_messages = conn.execute("SELECT COUNT(*) FROM messages WHERE NOT (kind = 'reaction' AND react_type >= 3000)").fetchone()[0]
+    # Automated senders are left out: there is nothing in a verification code worth paying to read.
+    total_messages = conn.execute("SELECT COUNT(*) FROM messages WHERE junk = 0 AND NOT (kind = 'reaction' AND react_type >= 3000)").fetchone()[0]
     with _store_lock:
         store = _store()
         try:
@@ -568,6 +569,7 @@ def results(conn: sqlite3.Connection) -> Dict[str, object]:
         "reviews_wanted": REVIEWS_WANTED,
         "definition": ("Cost is worked out from the token counts Anthropic reported for every reply, at the published prices. "
                        "The whole-history figure multiplies the measured cost per thousand messages by every message you have. "
+                       "Automated senders (codes, alerts, marketing) are left out. "
                        "It is an estimate: group chats and quieter conversations may cost a little more or less per message than "
                        "the people in this pilot. Batch is the half-price overnight rate the full read would use."),
     }

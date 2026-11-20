@@ -203,3 +203,6 @@ button.verdict.missing.on { background: #b7791f; }
 button.verdict.wrong.on { background: var(--bad); }
 @media (max-width: 900px) { .review-split { grid-template-columns: 1fr; } .original { position: static; } .original-scroll { max-height: 45vh; } }
 input.year { width: 90px; }
+label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--ink); }
+.sample { color: var(--muted); font-size: 13px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nowrap { white-space: nowrap; }

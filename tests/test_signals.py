@@ -96,9 +96,9 @@ class SignalTests(unittest.TestCase):
     def test_read_times(self):
         data = signals.read_times(self.conn, Filters())
         coverage = data["coverage"]
-        self.assertEqual((coverage["received"], coverage["received_with_read_time"]), (15, 2))
+        self.assertEqual((coverage["received"], coverage["received_with_read_time"]), (14, 2))   # the automated code is left out
         self.assertEqual((coverage["sent"], coverage["sent_with_read_time"]), (6, 1))
-        self.assertEqual((coverage["received_share"], coverage["sent_share"]), (13.3, 16.7))
+        self.assertEqual((coverage["received_share"], coverage["sent_share"]), (14.3, 16.7))   # 2 of 14
         mine = data["me_reading_them"]                                       # 5 minutes and 20 minutes
         self.assertEqual((mine["messages"], mine["median_seconds"], mine["within_5_minutes"], mine["over_a_day"]), (2, 750, 50.0, 0.0))
         self.assertEqual(data["them_reading_me"]["median_seconds"], 60)
@@ -189,14 +189,14 @@ class LabelAndCircleTests(unittest.TestCase):
         with self.assertRaises(QueryError):
             labels.save("", "family")
         labels.save("Avery Stone", "friend")
-        self.assertEqual(labels.load()["Avery Stone"], {"label": "friend", "pinned": False})
+        self.assertEqual(labels.load()["Avery Stone"], {"label": "friend", "pinned": False, "keep": False})
         labels.save("Avery Stone")
         self.assertEqual(labels.load(), {})
 
     def test_labels_survive_a_new_import(self):
         labels.save("Jordan Pike", "family", True)
         index.run_import(progress=lambda _line: None)
-        self.assertEqual(labels.load()["Jordan Pike"], {"label": "family", "pinned": True})
+        self.assertEqual(labels.load()["Jordan Pike"], {"label": "family", "pinned": True, "keep": False})
 
     def test_circles_fill_from_the_inside_with_pins_first(self):
         labels.save("Jordan Pike", "family", True)

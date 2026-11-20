@@ -43,7 +43,7 @@ Seven sections across the top. Explanations of how each number is worked out sit
 | Section | What is there |
 |---|---|
 | **Home** | Your inner circle, what has changed lately, and where to go next |
-| **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume |
+| **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume; the automated senders that were set aside |
 | **Search** | Find messages by words, phrases and filters; saved topics |
 | **Patterns** | Over time, replies and read times, reactions, tone, words and phrases, expressions and style, "we" against "I", and what gets shared |
 | **Reading** | Optional. Three AI models read a sample of your real conversations and write a digest of each; you mark them, blind, and see what a full read would cost |
@@ -58,9 +58,18 @@ Messages cannot show who you live with or see every day, so the people closest t
 
 - **Pin** the people in your inner circle. They are always listed first, whatever their score.
 - **Label** people as family, close friend, friend or work.
-- Label a business, delivery number or verification sender as **service** to remove it from the rankings.
+- Label a business, delivery number or verification sender as **service** to hide it everywhere. Most are found and hidden for you; see below.
 
 Home asks you to pin your inner circle the first time. Labels and pins are kept in their own file and survive every update.
+
+### Codes, alerts and marketing are set aside
+
+One-time codes, bank and card alerts, delivery notices and marketing texts are not people, and they crowd out the ones who are. The app finds these senders by itself and hides them from every screen, from anything sent to AI, and from what connected AI tools can search.
+
+- **Hidden automatically:** short codes (numbers of 3 to 6 digits, which only automated services use), and senders you have never really written to whose messages mostly look automated: verification codes, account alerts, "Reply STOP" wording, do-not-reply notices. Answering with one word such as STOP or YES does not count as writing to someone.
+- **Your call:** senders with weaker signs are listed under **People, Hidden senders** as "probably junk", with one button to hide them all.
+- **Nothing is deleted.** Hidden messages stay in your local database. **Bring back** restores a sender, and ticking **Include automated senders** on any screen with filters shows everything, which is how you find an old code.
+- **You always win:** anyone you pin or label as a person is never hidden, and anyone you label as a service always is. Group chats are never hidden.
 
 ## Privacy, in plain terms
 

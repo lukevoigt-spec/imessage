@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from . import extract, features, paths
+from . import extract, features, junk, paths
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS messages (
     react_type INTEGER NOT NULL DEFAULT 0,  -- for a reaction: 2000 love, 2001 like, 2002 dislike, 2003 laugh, 2004 emphasis, 2005 question
     read_ts INTEGER,                    -- when the message was read, if this Mac recorded it
     reply_to TEXT,                      -- Apple's id of the message this one replies to directly
-    att INTEGER NOT NULL DEFAULT 0      -- kinds of attachment carried; see features.py
+    att INTEGER NOT NULL DEFAULT 0,     -- kinds of attachment carried; see features.py
+    junk INTEGER NOT NULL DEFAULT 0     -- 1 when the sender is automated (codes, alerts, marketing) and hidden; see junk.py
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages (ts);
 CREATE INDEX IF NOT EXISTS idx_messages_counterpart ON messages (counterpart, ts);
@@ -77,10 +78,36 @@ ON CONFLICT(guid) DO UPDATE SET
 ME = "Me"
 
 
+_prepared: set = set()
+
+
+def _prepare(path: Path) -> None:
+    """Once per run, bring an existing database up to what this version expects before reading it.
+
+    Adds any new columns and marks automated senders as hidden. Both are quick and neither
+    re-reads Messages, so a new version of the app does not force a long update for this.
+    """
+    key = str(path)
+    if key in _prepared or not path.exists():
+        return
+    _prepared.add(key)
+    try:
+        conn = sqlite3.connect(str(path), timeout=60)
+        conn.row_factory = sqlite3.Row
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'").fetchone():
+            _upgrade(conn)
+            if not junk.is_applied(conn):
+                junk.apply(conn)
+        conn.close()
+    except sqlite3.Error:
+        pass                      # reading still works; the next import will finish the job
+
+
 def connect(path: Optional[Path] = None, readonly: bool = False) -> sqlite3.Connection:
     """Open the local database. Searching and statistics always open it read-only."""
     path = path or paths.index_db()
     if readonly:
+        _prepare(path)
         conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
     else:
         conn = sqlite3.connect(str(path), timeout=60)
@@ -99,7 +126,7 @@ SCHEMA_VERSION = 3
 NEW_COLUMNS = (("tone", "REAL NOT NULL DEFAULT 0"), ("words", "INTEGER NOT NULL DEFAULT 0"),
                ("flags", "INTEGER NOT NULL DEFAULT 0"), ("react_to", "TEXT"),
                ("react_type", "INTEGER NOT NULL DEFAULT 0"), ("read_ts", "INTEGER"), ("reply_to", "TEXT"),
-               ("att", "INTEGER NOT NULL DEFAULT 0"))
+               ("att", "INTEGER NOT NULL DEFAULT 0"), ("junk", "INTEGER NOT NULL DEFAULT 0"))
 
 
 def _upgrade(conn: sqlite3.Connection) -> None:
@@ -280,6 +307,8 @@ def run_import(
 
     progress("Building the search index...")
     index.execute("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
+    progress("Setting aside automated senders (codes, alerts, marketing)...")
+    report["automated_senders_hidden"] = junk.apply(index)["hidden_senders"]
     total, first_day, last_day = index.execute("SELECT COUNT(*), MIN(day), MAX(day) FROM messages").fetchone()
     report.update({
         "total_in_local_database": total,

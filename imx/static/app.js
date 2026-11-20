@@ -11,7 +11,7 @@ const view = document.getElementById("view");
 const state = {
   tab: "home",
   person: "",
-  filters: { contact: "", date_from: "", date_to: "", direction: "", scope: "" },
+  filters: { contact: "", date_from: "", date_to: "", direction: "", scope: "", include_junk: "" },
   search: { q: "", sort: "newest", offset: 0 },
   bucket: "month",
   keyword: "",
@@ -551,7 +551,7 @@ async function renderConnect() {
 /* Six sections. Each holds one or more screens. */
 const NAV = [
   { id: "home", label: "Home", screens: [["home", "Home"]] },
-  { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"]] },
+  { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"], ["hidden", "Hidden senders"]] },
   { id: "search", label: "Search", screens: [["search", "Search"], ["topics", "Topics"]] },
   { id: "patterns", label: "Patterns", screens: [["trends", "Over time"], ["replies", "Replies"], ["reactions", "Reactions"], ["tone", "Tone"], ["words", "Words"], ["expressions", "Expressions"], ["language", "We and I"], ["sharing", "Sharing"]] },
   { id: "reading", label: "Reading", screens: [["pilot", "Reading pilot"], ["review", "Review digests"]] },
@@ -559,7 +559,7 @@ const NAV = [
   { id: "setup", label: "Setup", screens: [["connect", "Setup"]] },
 ];
 /* Screens that always use your whole history, so the filter bar is hidden on them. */
-const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review"]);
+const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden"]);
 const lastScreen = {};
 const SCREENS = {};
 
@@ -584,7 +584,10 @@ function setTab(name) {
 }
 
 const filterInputs = { contact: "f-contact", date_from: "f-from", date_to: "f-to", direction: "f-direction", scope: "f-scope" };
-function syncFilterInputs() { for (const [key, id] of Object.entries(filterInputs)) document.getElementById(id).value = state.filters[key]; }
+function syncFilterInputs() {
+  for (const [key, id] of Object.entries(filterInputs)) document.getElementById(id).value = state.filters[key];
+  document.getElementById("f-junk").checked = state.filters.include_junk === "1";
+}
 function setFilter(key, value) { state.filters[key] = value; state.search.offset = 0; syncFilterInputs(); setTab(state.tab); }
 
 async function loadShell() {
@@ -622,6 +625,7 @@ async function start() {
   for (const [key, id] of Object.entries(filterInputs)) {
     document.getElementById(id).addEventListener("change", (event) => setFilter(key, event.target.value.trim()));
   }
+  document.getElementById("f-junk").addEventListener("change", (event) => setFilter("include_junk", event.target.checked ? "1" : ""));
   document.getElementById("f-clear").addEventListener("click", () => {
     for (const key of Object.keys(state.filters)) state.filters[key] = "";
     state.search.offset = 0; syncFilterInputs(); setTab(state.tab);
@@ -802,6 +806,10 @@ async function renderHome() {
         h("div", {}, h("h3", { text: "Talking less" }), list(d.drift.fading, (i) => fmt(i.before) + " then " + fmt(i.recent) + " messages")),
         h("div", {}, h("h3", { text: "Gone quiet" }), list(d.drift.gone_quiet, (i) => "silent " + fmt(i.days_silent) + " days after " + fmt(i.total) + " messages"))),
       h("p", { class: "muted small", text: "Compares the last 180 days of your history with the 180 days before." })),
+    d.hidden.senders || d.hidden.suggested ? h("p", { class: "muted small" },
+      fmt(d.hidden.messages) + " messages from " + fmt(d.hidden.senders) + " automated senders (codes, alerts, marketing) are set aside" +
+      (d.hidden.suggested ? ", and " + fmt(d.hidden.suggested) + " more senders look like junk. " : ". "),
+      h("button", { class: "link", text: "Review hidden senders", onclick: () => setTab("hidden") })) : null,
     h("div", { class: "panel" }, h("h2", { text: "Where to go" }),
       h("div", { class: "row" },
         h("button", { text: "Find a message", onclick: () => setTab("search") }), h("button", { text: "See your people", onclick: () => setTab("ranking") }),
@@ -1085,6 +1093,39 @@ async function renderExpressions() {
           st.by_person.map((r) => [h("tr", {}, h("td", {}, "Me with ", personLink(r.name)), styleCells(r.me)), h("tr", {}, h("td", { class: "muted", text: r.name + " with me" }), styleCells(r.them))]))))));
 }
 
+/* ---------- Hidden senders: codes, alerts, marketing ---------- */
+
+async function renderHidden() {
+  loading();
+  const d = await request("/api/junk");
+  const change = async (action, names) => {
+    await post("/api/junk/change", { action, names });
+    await loadShell();                 // totals and the name list at the top change too
+    renderHidden();
+  };
+  const table = (rows, action, label) => h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, h("th", { text: "Sender" }), h("th", { class: "n", text: "Messages" }), h("th", { text: "Last" }), h("th", { text: "Why" }), h("th", { text: "Example" }), h("th", {}))),
+    h("tbody", {}, rows.map((r) => h("tr", {},
+      h("td", {}, h("button", { class: "link", text: r.name, onclick: () => { state.filters.contact = r.name; syncFilterInputs(); setTab("search"); } })),
+      h("td", { class: "n", text: fmt(r.messages) }), h("td", { class: "nowrap", text: r.last_day || "" }),
+      h("td", { class: "small", text: r.reason }), h("td", {}, h("div", { class: "sample", text: r.sample || "" })),
+      h("td", {}, h("button", { type: "button", text: label, onclick: () => change(action, [r.name]) })))))));
+  show(
+    h("div", { class: "panel" }, h("h2", { text: "Hidden senders" }),
+      definition(d.definition),
+      h("p", {}, h("strong", { text: fmt(d.hidden_messages) + " messages from " + fmt(d.hidden.length) + " automated senders" }),
+        " are set aside. They are left out of every screen, of anything sent to AI, and of what connected AI tools can search. Nothing is deleted. To look through them, tick ",
+        h("em", { text: "Include automated senders" }), " on any screen with filters, or press a sender's name here."),
+      d.hidden.length ? table(d.hidden, "keep", "Bring back") : h("p", { class: "muted", text: "No automated senders were found." })),
+    d.suggested.length ? h("div", { class: "panel" }, h("h2", { text: "Probably junk: your call" }),
+      h("p", { text: "These were not hidden, because the signs are weaker. Hide the ones that are not people." }),
+      h("div", { class: "row" }, h("button", { class: "primary", text: "Hide all " + fmt(d.suggested.length), onclick: () => change("hide", d.suggested.map((r) => r.name)) })),
+      h("div", { class: "spacer" }), table(d.suggested, "hide", "Hide")) : null,
+    d.kept.length ? h("div", { class: "panel" }, h("h2", { text: "Brought back by you" }),
+      h("p", { class: "muted small", text: "The rules would hide these, but you chose to keep them." }),
+      table(d.kept, "hide", "Hide again")) : null);
+}
+
 /* ---------- Reading: AI digests of real conversations ---------- */
 
 const usd = (n) => (n === null || n === undefined) ? "–" : "$" + Number(n).toFixed(n > 0 && n < 1 ? 3 : 2);
@@ -1292,7 +1333,7 @@ Object.assign(SCREENS, {
   search: renderSearch, topics: renderTopics,
   trends: renderTrends, replies: renderReplies, reactions: renderReactions, tone: renderTone, words: renderWords,
   expressions: renderExpressions, language: renderLanguage, sharing: renderSharing,
-  ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(),
+  ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(), hidden: renderHidden,
 });
 
 start();

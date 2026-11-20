@@ -287,7 +287,7 @@ def _year_window(conn: sqlite3.Connection, start: str, end: str) -> Dict[str, ob
     skip = labels.services()
     rows = [r for r in conn.execute(
         "SELECT counterpart, COUNT(*) AS n, COUNT(DISTINCT month) AS months, SUM(from_me) AS sent "
-        "FROM messages WHERE is_group = 0 AND kind != 'reaction' AND day > ? AND day <= ? GROUP BY counterpart "
+        "FROM messages WHERE is_group = 0 AND kind != 'reaction' AND junk = 0 AND day > ? AND day <= ? GROUP BY counterpart "
         "HAVING sent > 0", (start, end)
     ).fetchall() if r["counterpart"] not in skip]
     total = sum(r["n"] for r in rows)
@@ -315,7 +315,7 @@ def community(conn: sqlite3.Connection) -> Dict[str, object]:
         now = _year_window(conn, _days_ago(last, 365), end)
         earlier = _year_window(conn, _days_ago(last, 730), _days_ago(last, 365))
         now["active_last_30_days"] = conn.execute(
-            "SELECT COUNT(DISTINCT counterpart) FROM messages WHERE is_group = 0 AND kind != 'reaction' AND day > ?",
+            "SELECT COUNT(DISTINCT counterpart) FROM messages WHERE is_group = 0 AND kind != 'reaction' AND junk = 0 AND day > ?",
             (_days_ago(last, 30),)).fetchone()[0]
         now["active_groups"] = conn.execute(
             "SELECT COUNT(DISTINCT counterpart) FROM messages WHERE is_group = 1 AND kind != 'reaction' AND day > ?",
@@ -323,12 +323,12 @@ def community(conn: sqlite3.Connection) -> Dict[str, object]:
         by_year: Dict[str, Dict[str, int]] = {}
         for year, people in conn.execute(
             "SELECT year, COUNT(*) FROM (SELECT year, counterpart FROM messages WHERE is_group = 0 AND "
-            "kind != 'reaction' GROUP BY year, counterpart HAVING COUNT(*) >= 20) GROUP BY year"
+            "kind != 'reaction' AND junk = 0 GROUP BY year, counterpart HAVING COUNT(*) >= 20) GROUP BY year"
         ):
             by_year.setdefault(year, {"year": year, "regular_people": 0, "new_people": 0})["regular_people"] = people
         for year, people in conn.execute(
             "SELECT SUBSTR(first_day, 1, 4) AS year, COUNT(*) FROM (SELECT counterpart, MIN(day) AS first_day "
-            "FROM messages WHERE is_group = 0 AND kind != 'reaction' GROUP BY counterpart HAVING COUNT(*) >= 20) "
+            "FROM messages WHERE is_group = 0 AND kind != 'reaction' AND junk = 0 GROUP BY counterpart HAVING COUNT(*) >= 20) "
             "GROUP BY year"
         ):
             by_year.setdefault(year, {"year": year, "regular_people": 0, "new_people": 0})["new_people"] = people
@@ -354,7 +354,7 @@ def drift(conn: sqlite3.Connection, limit: int = 15) -> Dict[str, object]:
             "SELECT counterpart, COUNT(*) AS total, MAX(day) AS last_day, "
             "SUM(CASE WHEN day > ? THEN 1 ELSE 0 END) AS recent, "
             "SUM(CASE WHEN day > ? AND day <= ? THEN 1 ELSE 0 END) AS before "
-            "FROM messages WHERE is_group = 0 AND kind != 'reaction' GROUP BY counterpart HAVING SUM(from_me) > 0",
+            "FROM messages WHERE is_group = 0 AND kind != 'reaction' AND junk = 0 GROUP BY counterpart HAVING SUM(from_me) > 0",
             (recent_from, before_from, recent_from)
         ).fetchall()
         skip = labels.services()
@@ -692,12 +692,12 @@ def signature(conn: sqlite3.Connection, contact: str, top: int = 20) -> Dict[str
                 # Other people's messages are the yardstick for "usual". A large, evenly spaced
                 # sample measures that just as well as reading every one, and far faster.
                 others = conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE counterpart != ? AND from_me = ? AND kind = 'text' AND is_group = 0",
+                    "SELECT COUNT(*) FROM messages WHERE counterpart != ? AND from_me = ? AND kind = 'text' AND is_group = 0 AND junk = 0",
                     (contact, from_me)).fetchone()[0]
                 step = max(1, -(-others // SIGNATURE_BACKGROUND_SAMPLE))
                 for (text,) in conn.execute(
                     "SELECT text FROM messages WHERE counterpart != ? AND from_me = ? AND kind = 'text' AND is_group = 0 "
-                    "AND id % ? = 0", (contact, from_me, step)
+                    "AND junk = 0 AND id % ? = 0", (contact, from_me, step)
                 ):
                     tokens = _phrase_tokens(text)
                     background_words += len(tokens)

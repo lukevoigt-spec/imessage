@@ -97,7 +97,7 @@ class ServerTests(unittest.TestCase):
     def test_search_and_statistics_over_http(self):
         status, data, _ = self.call("/api/search?q=dinner+friday&contact=Avery+Stone")
         self.assertEqual((status, data["total"]), (200, 2))
-        self.assertEqual(self.call("/api/stats/people")[1]["totals"]["messages"], 21)
+        self.assertEqual(self.call("/api/stats/people")[1]["totals"]["messages"], 20)
         self.assertEqual(self.call("/api/stats/trends?bucket=fortnight")[0], 400)
         self.assertEqual(self.call("/api/search?from=notadate")[0], 200)   # unknown parameter names are ignored
         self.assertEqual(self.call("/api/search?date_from=notadate")[0], 400)
@@ -111,7 +111,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.call("/api/status", token=False)[0], 403)
         status, home, _ = self.call("/api/home")
         self.assertEqual(status, 200)
-        self.assertEqual(home["totals"]["messages"], 21)
+        self.assertEqual(home["totals"]["messages"], 20)
+        self.assertEqual(home["hidden"], {"senders": 1, "messages": 1, "suggested": 0})
         self.assertEqual(home["inner_circle"], [])
         self.assertIn("signals", home["import"])
 
@@ -119,7 +120,7 @@ class ServerTests(unittest.TestCase):
         from imx import labels
         try:
             status, data, _ = self.call("/api/labels/save", body={"name": "Avery Stone", "label": "family", "pinned": True})
-            self.assertEqual((status, data["labels"]["Avery Stone"]), (200, {"label": "family", "pinned": True}))
+            self.assertEqual((status, data["labels"]["Avery Stone"]), (200, {"label": "family", "pinned": True, "keep": False}))
             self.assertEqual(self.call("/api/labels/save", body={"name": "Avery Stone", "label": "nemesis"})[0], 400)
             self.assertEqual(self.call("/api/labels/save", body={"name": "Avery Stone", "label": "family"}, token=False)[0], 403)
             self.assertEqual(self.call("/api/labels")[1]["choices"], ["family", "close friend", "friend", "work", "service"])
@@ -173,9 +174,9 @@ class ServerTests(unittest.TestCase):
             ai.MAX_MESSAGES = original
         self.assertEqual(status, 200)
         self.assertEqual(data["would_send"], 5)
-        # 22 imported, minus 1 tapback and 2 messages with no words (a photo, an unreadable body).
-        self.assertEqual(data["total_matching"], 19)
-        self.assertEqual(data["not_sent"], 14)
+        # 22 imported, minus 1 tapback, 2 messages with no words (a photo, an unreadable body) and 1 automated code.
+        self.assertEqual(data["total_matching"], 18)
+        self.assertEqual(data["not_sent"], 13)
         self.assertEqual(data["last_day"], "2025-06-01")      # 'recent' keeps the newest
 
     def test_confirmed_request_sends_only_the_selection_and_logs_no_text(self):
@@ -254,7 +255,7 @@ class ServerTests(unittest.TestCase):
                             "params": {"name": "search_messages", "arguments": {"query": "", "limit": 9999}}})
         result = json.loads(replies[0]["result"]["content"][0]["text"])
         self.assertLessEqual(len(result["messages"]), mcp_server.MAX_RESULTS)
-        self.assertEqual(result["total_matching"], 21)
+        self.assertEqual(result["total_matching"], 20)        # the automated code is not offered to AI tools
         self.assertIn("connected_tool", paths.activity_log().read_text(encoding="utf-8"))
 
     def test_mcp_offers_nothing_that_changes_data(self):

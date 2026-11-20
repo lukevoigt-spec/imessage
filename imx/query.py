@@ -26,16 +26,18 @@ class Filters:
     date_to    last day to include, YYYY-MM-DD
     direction  'sent' (by you), 'received', or '' for both
     scope      'direct' (one-to-one chats), 'group', or '' for both
+    include_junk  also look at automated senders (codes, alerts, marketing), which are hidden otherwise
     """
 
     def __init__(self, contact: str = "", date_from: str = "", date_to: str = "",
-                 direction: str = "", scope: str = "", include_reactions: bool = False):
+                 direction: str = "", scope: str = "", include_reactions: bool = False, include_junk: bool = False):
         self.contact = (contact or "").strip()
         self.date_from = (date_from or "").strip()
         self.date_to = (date_to or "").strip()
         self.direction = (direction or "").strip()
         self.scope = (scope or "").strip()
         self.include_reactions = bool(include_reactions)
+        self.include_junk = bool(include_junk)
         for value in (self.date_from, self.date_to):
             if value and not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
                 raise QueryError("Dates must look like 2025-03-31.")
@@ -52,10 +54,11 @@ class Filters:
             date_to=str(data.get("date_to") or ""),
             direction=str(data.get("direction") or ""),
             scope=str(data.get("scope") or ""),
+            include_junk=str(data.get("include_junk") or "").lower() in ("1", "true", "yes"),
         )
 
     def key(self) -> tuple:
-        return (self.contact, self.date_from, self.date_to, self.direction, self.scope, self.include_reactions)
+        return (self.contact, self.date_from, self.date_to, self.direction, self.scope, self.include_reactions, self.include_junk)
 
     def where(self, alias: str = "m") -> Tuple[str, list]:
         """SQL conditions and their values. Values are always passed separately, never pasted in."""
@@ -66,6 +69,9 @@ class Filters:
         if self.contact:
             clauses.append("%s.counterpart = ?" % alias)
             params.append(self.contact)
+        elif not self.include_junk:
+            # Automated senders are left out unless asked for. Naming a sender always shows that sender.
+            clauses.append("%s.junk = 0" % alias)
         if self.date_from:
             clauses.append("%s.day >= ?" % alias)
             params.append(self.date_from)
@@ -188,7 +194,7 @@ def context(conn: sqlite3.Connection, message_id: int, before: int = 12, after: 
 def contacts(conn: sqlite3.Connection, limit: int = 2000) -> List[Dict[str, object]]:
     """Everyone and every group you have messages with, busiest first."""
     rows = conn.execute(
-        "SELECT counterpart, is_group, COUNT(*) AS total FROM messages WHERE kind != 'reaction' "
+        "SELECT counterpart, is_group, COUNT(*) AS total FROM messages WHERE kind != 'reaction' AND junk = 0 "
         "GROUP BY counterpart, is_group ORDER BY total DESC LIMIT ?", (int(limit),)
     ).fetchall()
     return [{"name": r["counterpart"], "is_group": bool(r["is_group"]), "total": r["total"]} for r in rows]
