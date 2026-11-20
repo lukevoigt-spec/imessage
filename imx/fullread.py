@@ -45,7 +45,7 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import activity, claude_api, index, reading
+from . import activity, claude_api, index, jobs, reading
 from .claude_api import AIError
 from .query import QueryError
 
@@ -392,6 +392,8 @@ def adopt_lost_batches(list_batches: Callable = claude_api.batch_list) -> int:
         store = _store()
         try:
             known = {row[0] for row in store.execute("SELECT id FROM batch")}
+            store.executescript(jobs.SCHEMA)
+            known |= {row[0] for row in store.execute("SELECT id FROM job_batch")}     # the check's and the histories' batches
         finally:
             store.close()
     found = 0

@@ -208,3 +208,17 @@ label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--i
 .nowrap { white-space: nowrap; }
 textarea.report-text { width: 100%; font-family: var(--mono); font-size: 12px; margin: 10px 0; }
 .bar-track.tall { height: 18px; margin: 4px 0 12px; }
+
+/* Histories */
+.lead { font-size: 18px; line-height: 1.45; margin: 6px 0 10px; }
+.lead-small { display: block; margin: 4px 0; }
+.claim { border-top: 1px solid var(--line); padding: 10px 0; }
+.claim:first-of-type { border-top: none; }
+.claim h4 { margin: 0 0 4px; }
+.claim p { margin: 0 0 6px; }
+.refs { margin-top: 2px; }
+button.ref { border: 1px solid var(--line); background: var(--bg); border-radius: 999px; padding: 0 8px; margin: 0 4px 4px 0; font-size: 12px; min-height: 22px; cursor: pointer; color: var(--accent); }
+.history-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+button.history-card { text-align: left; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; cursor: pointer; color: var(--ink); font: inherit; }
+button.history-card:hover { border-color: var(--accent); }
+.tag { font-size: 11px; background: var(--accent-soft); border-radius: 999px; padding: 1px 7px; margin-left: 6px; }

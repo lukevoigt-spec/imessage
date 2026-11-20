@@ -128,7 +128,22 @@ someone@example.com,Jordan Pike
 
 ## Reading: have AI read your conversations (optional)
 
-Counting cannot tell you what a conversation was about, how it felt, or what was left unresolved. Reading can. The **Reading** section has four screens.
+Counting cannot tell you what a conversation was about, how it felt, or what was left unresolved. Reading can. The **Reading** section does it in three layers: a digest of every stretch of conversation (the full read), a check of how accurate those digests are, and a history of each relationship written from them.
+
+### Histories
+
+The story of you and one person, written by Claude Opus from every digest of your conversation: how it began, its eras, what you keep coming back to, friction and repair, what each of you gives and asks for, turning points, strengths, hard truths, and what looks unresolved.
+
+- **Every point shows its evidence.** The numbers under a point open the digest it rests on, and that opens the messages themselves. A history is a model's reading of other models' digests, two steps from what was said, so check anything that surprises you.
+- **Who gets one.** The list starts with everyone you have pinned, then the 25 people you have exchanged the most messages with. Add or remove anyone.
+- **How it is written.** A long relationship is written year by year first, then as a whole, so it comes back in two rounds. A short one is written in one step.
+- **What is sent.** Digests only. The messages themselves are not sent again.
+- **What it cannot know.** Anything that was never texted. People who live together text mostly about logistics, and the model is told not to mistake that for distance.
+- **The cap.** $40, planned for at twice the estimate. Nobody is written twice unless you throw their history away.
+
+### Accuracy check
+
+How far can the digests be trusted? Claude Opus re-reads a random sample of 150 digests against the original messages and reports any that say something the conversation does not support, or leave out something that matters. Each flagged digest is listed with what it said, what the conversation actually shows, and the messages, so you can check the checker. A third of the sample comes from the people read by Opus, where it is the same model checking itself, a weaker test. The cap is $10.
 
 ### Full read
 

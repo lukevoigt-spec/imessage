@@ -21,7 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, activity, ai, claude_api, extract, fullread, index, insights, junk, labels, paths, query, reading,
+from . import (__version__, activity, ai, check, claude_api, extract, fullread, histories, index, insights, junk, labels, paths,
+               query, reading,
                science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
@@ -251,6 +252,14 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/reading/status": lambda conn, p: reading.status(),
     "/api/reading/results": lambda conn, p: reading.results(conn),
     "/api/reading/report": lambda conn, p: reading.pilot_report(conn),
+    "/api/check/plan": lambda conn, p: _without(check.plan(conn, int(p.get("size") or check.SAMPLE)), "_items"),
+    "/api/check/status": lambda conn, p: check.status(),
+    "/api/check/summary": lambda conn, p: check.summary(),
+    "/api/histories": lambda conn, p: histories.overview(),
+    "/api/histories/plan": lambda conn, p: _without(histories.plan(), "_ready"),
+    "/api/histories/status": lambda conn, p: histories.status(),
+    "/api/history": lambda conn, p: histories.read(p.get("name", ""), p.get("group") == "1"),
+    "/api/digest": lambda conn, p: histories.digest_by_number(p.get("id", "")),
     "/api/full/plan": lambda conn, p: _full_plan(conn),
     "/api/full/status": lambda conn, p: fullread.status(),
     "/api/full/people": lambda conn, p: {"people": fullread.digest_people()},
@@ -343,6 +352,29 @@ def _reading_start(conn, body) -> dict:
     return reading.start(conn, *_reading_args(body))
 
 
+def _without(planned: dict, key: str) -> dict:
+    """A plan as the page sees it: the counts, without the text that would be sent."""
+    planned.pop(key, None)
+    planned["key"] = claude_api.status()
+    return planned
+
+
+def _confirmed(body: dict) -> None:
+    # The confirm flag is set only by the button under the preview of what would be sent.
+    if body.get("confirm") is not True:
+        raise QueryError("Confirm the preview before sending anything to the AI.")
+
+
+def _check_start(conn, body) -> dict:
+    _confirmed(body)
+    return check.start(conn, int(body.get("size") or check.SAMPLE))
+
+
+def _histories_start(conn, body) -> dict:
+    _confirmed(body)
+    return histories.start()
+
+
 def _full_plan(conn) -> dict:
     planned = fullread.plan(conn)
     planned.pop("_pending")          # transcripts stay on the server; the page only needs the counts
@@ -365,6 +397,12 @@ def _save_key(conn, body) -> dict:
 
 POST_ROUTES: Dict[str, Callable] = {
     "/api/junk/change": _junk_change,
+    "/api/check/start": _check_start,
+    "/api/check/stop": lambda conn, b: check.stop(),
+    "/api/histories/start": _histories_start,
+    "/api/histories/stop": lambda conn, b: histories.stop(),
+    "/api/histories/people": lambda conn, b: {"chosen": histories.set_people(list(b.get("names") or []))},
+    "/api/histories/forget": lambda conn, b: histories.forget(str(b.get("name") or ""), bool(b.get("group"))),
     "/api/full/start": _full_start,
     "/api/full/stop": lambda conn, b: fullread.stop(),
     "/api/full/close-people": lambda conn, b: {"close_people": fullread.set_close_people(list(b.get("names") or []))},
@@ -404,7 +442,8 @@ def serve(port: int = 8765, open_browser: bool = True) -> str:
     print("Leave this window open while you use it. To stop, use Quit on the Setup screen or close this window.")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    fullread.resume_if_needed()      # carry on with a full read that was under way when the app was last closed
+    for job in (fullread, check, histories):
+        job.resume_if_needed()       # carry on with anything that was under way when the app was last closed
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
