@@ -395,14 +395,8 @@ async function renderTopics() {
 }
 
 function aiSetup(ai) {
-  if (ai.sdk_installed && ai.key_found) return null;
-  const steps = [];
-  if (!ai.sdk_installed) steps.push(h("li", {}, "Install the Anthropic library. In Terminal run:", h("pre", { class: "code", text: "python3 -m pip install anthropic" })));
-  if (!ai.key_found) steps.push(h("li", {}, "Create an API key at console.anthropic.com, then store it in the macOS Keychain. In Terminal run this and paste the key when asked:",
-    h("pre", { class: "code", text: 'security add-generic-password -a "$USER" -s ' + ai.keychain_service + " -w" })));
-  return h("div", { class: "notice" }, h("strong", { text: "AI is not set up yet." }),
-    " API use is billed per request and is separate from a Claude subscription. Preview still works without it.",
-    h("ol", {}, steps), "Then stop and restart iMessage Explorer.");
+  if (ai.key_found) return null;
+  return keyPanel(async () => { await loadShell(); setTab("ask"); });
 }
 
 async function renderAsk() {
@@ -424,7 +418,7 @@ async function renderAsk() {
     try {
       const p = await post("/api/ai/preview", body());
       if (!p.would_send) { out.replaceChildren(h("p", { text: "No messages match, so there is nothing to send." })); return; }
-      const confirmButton = h("button", { class: "primary", text: label, disabled: !(ai.sdk_installed && ai.key_found), onclick: async () => {
+      const confirmButton = h("button", { class: "primary", text: label, disabled: !ai.key_found, onclick: async () => {
         out.replaceChildren(h("p", { class: "muted", text: "Waiting for the AI. This can take a minute…" }));
         try { await action(); } catch (error) { out.replaceChildren(h("p", { class: "error", text: error.message })); }
       } });
@@ -534,7 +528,7 @@ async function renderConnect() {
       meta.activity.length ? h("div", { class: "scroll" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "When" }), h("th", { text: "What" }), h("th", { class: "n", text: "Messages" }), h("th", { text: "Conversations" }))),
         h("tbody", {}, meta.activity.map((e) => h("tr", {}, h("td", { text: e.when }),
-          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : "Find topics" }),
+          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : "Find topics" }),
           h("td", { class: "n", text: fmt(e.messages_sent !== undefined ? e.messages_sent : e.messages_returned) }),
           h("td", { text: (e.conversations || []).join(", ") }))))))
         : h("p", { class: "muted", text: "Nothing yet. Every AI request and connected-tool search will be listed here, without the message text." })),
@@ -560,11 +554,12 @@ const NAV = [
   { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"]] },
   { id: "search", label: "Search", screens: [["search", "Search"], ["topics", "Topics"]] },
   { id: "patterns", label: "Patterns", screens: [["trends", "Over time"], ["replies", "Replies"], ["reactions", "Reactions"], ["tone", "Tone"], ["words", "Words"], ["expressions", "Expressions"], ["language", "We and I"], ["sharing", "Sharing"]] },
+  { id: "reading", label: "Reading", screens: [["pilot", "Reading pilot"], ["review", "Review digests"]] },
   { id: "ask", label: "Ask AI", screens: [["ask", "Ask AI"]] },
   { id: "setup", label: "Setup", screens: [["connect", "Setup"]] },
 ];
 /* Screens that always use your whole history, so the filter bar is hidden on them. */
-const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect"]);
+const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review"]);
 const lastScreen = {};
 const SCREENS = {};
 
@@ -811,6 +806,7 @@ async function renderHome() {
       h("div", { class: "row" },
         h("button", { text: "Find a message", onclick: () => setTab("search") }), h("button", { text: "See your people", onclick: () => setTab("ranking") }),
         h("button", { text: "Open someone's profile", onclick: () => { state.person = ""; setTab("profile"); } }), h("button", { text: "Explore patterns", onclick: () => setTab("trends") }),
+        h("button", { text: "Have AI read your conversations", onclick: () => setTab("pilot") }),
         h("button", { text: "Ask AI a question", onclick: () => setTab("ask") })),
       h("p", { class: "muted small", text: "Last updated " + (d.import.finished_at || "never") + ". Press Update messages at the top right to bring in new ones." })));
 }
@@ -1089,6 +1085,201 @@ async function renderExpressions() {
           st.by_person.map((r) => [h("tr", {}, h("td", {}, "Me with ", personLink(r.name)), styleCells(r.me)), h("tr", {}, h("td", { class: "muted", text: r.name + " with me" }), styleCells(r.them))]))))));
 }
 
+/* ---------- Reading: AI digests of real conversations ---------- */
+
+const usd = (n) => (n === null || n === undefined) ? "–" : "$" + Number(n).toFixed(n > 0 && n < 1 ? 3 : 2);
+const pilot = { people: [], year: "", per_person: 40, timer: null };
+
+/* Add the Anthropic API key from inside the app. It is stored in the Mac's Keychain. */
+function keyPanel(onSaved) {
+  const input = h("input", { type: "password", placeholder: "sk-ant-…", autocomplete: "off", "aria-label": "Anthropic API key" });
+  const out = h("div", {});
+  const save = async () => {
+    out.replaceChildren(h("p", { class: "muted", text: "Saving and checking the key…" }));
+    try {
+      const result = await post("/api/key/save", { key: input.value });
+      input.value = "";
+      const missing = Object.entries(result.models).filter(([, ok]) => !ok).map(([model]) => model);
+      out.replaceChildren(h("p", { text: missing.length
+        ? "The key is saved, but this account cannot use: " + missing.join(", ") + ". The pilot will skip those."
+        : "The key is saved and works with all three models." }),
+        h("button", { class: "primary", text: "Continue", onclick: onSaved }));
+    } catch (error) { out.replaceChildren(h("p", { class: "error", text: error.message })); }
+  };
+  return h("div", { class: "panel start-here" }, h("h2", { text: "Connect your Anthropic account" }),
+    h("p", { text: "Reading conversations uses Anthropic's API, which is billed per use against the credit on your Anthropic account. It needs a key from that account." }),
+    h("ol", {},
+      h("li", { text: "In your browser, sign in at console.anthropic.com, open API keys, and create a key." }),
+      h("li", { text: "Copy the key and paste it here." })),
+    h("div", { class: "row grow" }, input, h("button", { class: "primary", text: "Save key", onclick: save })),
+    out,
+    h("p", { class: "small muted", text: "The key is stored in this Mac's Keychain, not in a file. Saving it sends no messages: it only asks Anthropic whether the key works." }));
+}
+
+function pilotResults(found) {
+  if (!found.models.some((m) => m.messages_read)) return null;
+  return h("div", { class: "panel" }, h("h2", { text: "What it cost, and what reading everything would cost" }),
+    definition(found.definition),
+    h("div", { class: "cards" }, card(usd(found.spent_usd), "spent so far"), card(usd(found.cap_usd), "pilot cap"),
+      card(fmt(found.units_reviewed) + " of " + found.reviews_wanted, "conversations you have marked")),
+    h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", { text: "Model" }), h("th", { class: "n", text: "Digests" }), h("th", { class: "n", text: "Declined" }),
+        h("th", { class: "n", text: "Messages read" }), h("th", { class: "n", text: "Spent" }), h("th", { class: "n", text: "Per 1,000 messages" }),
+        h("th", { class: "n", text: "Whole history" }), h("th", { class: "n", text: "Whole history, batch" }),
+        h("th", { class: "n", text: "Right" }), h("th", { class: "n", text: "Missing something" }), h("th", { class: "n", text: "Wrong" }))),
+      h("tbody", {}, found.models.map((m) => h("tr", {}, h("td", {}, h("strong", { text: m.name })),
+        h("td", { class: "n", text: fmt(m.digests) }), h("td", { class: "n", text: fmt(m.declined) + (m.unreadable ? " (+" + m.unreadable + " unreadable)" : "") }),
+        h("td", { class: "n", text: fmt(m.messages_read) }), h("td", { class: "n", text: usd(m.spent_usd) }),
+        h("td", { class: "n", text: usd(m.usd_per_thousand_messages) }), h("td", { class: "n", text: usd(m.whole_history_usd) }),
+        h("td", { class: "n", text: usd(m.whole_history_batch_usd) }),
+        h("td", { class: "n", text: fmt(m.right) }), h("td", { class: "n", text: fmt(m.missing) }), h("td", { class: "n", text: fmt(m.wrong) })))))),
+    h("p", { class: "small muted", text: "Right, missing and wrong are your own marks from the Review screen. Whole history covers all " + fmt(found.messages_in_history) + " of your messages." }));
+}
+
+function pilotProgress(st) {
+  const rows = st.models.map((m) => {
+    const done = m.ok + m.declined + m.unreadable + m.failed;
+    const fill = h("div", { class: "bar-sent" });
+    fill.style.width = (m.total ? Math.round(100 * done / m.total) : 100) + "%";   // set from code: the page's security rules forbid inline styles
+    return h("div", { class: "bar-row" }, h("div", { class: "name", text: m.name }),
+      h("div", { class: "bar-track" }, fill),
+      h("div", { class: "val", text: done + " of " + m.total + (m.declined ? ", " + m.declined + " declined" : "") + (m.failed ? ", " + m.failed + " failed" : "") }));
+  });
+  const headline = st.running ? "Reading…" : st.stopped_at_cap ? "Stopped at the spending cap" : st.stopped_by_you ? "Stopped" : "Finished";
+  return h("div", { class: "panel" }, h("h2", { text: headline }),
+    h("p", { text: "Spent " + usd(st.spent_usd) + " of the " + usd(st.cap_usd) + " cap." }),
+    h("div", { class: "bars" }, rows),
+    st.problems.length ? h("div", { class: "notice" }, h("strong", { text: "Problems: " }), st.problems.join("  ")) : null,
+    !st.running && st.models.some((m) => m.failed) ? h("p", { class: "small muted", text: "Some conversations were not read. Nothing was charged for those. Go back to the pilot and send again to read only the ones still missing." }) : null,
+    h("div", { class: "spacer" }),
+    st.running
+      ? h("div", { class: "row" }, h("button", { text: "Stop", onclick: async () => { await post("/api/reading/stop", {}); } }),
+          h("span", { class: "small muted", text: "You can leave this screen. Reading continues while iMessage Explorer stays open, and digests already read are kept." }))
+      : h("div", { class: "row" }, h("button", { class: "primary", text: "Review the digests", onclick: () => setTab("review") }),
+          h("button", { text: "Back to the pilot", onclick: () => { pilot.showProgress = false; renderPilot(); } })));
+}
+
+async function watchPilot() {
+  clearTimeout(pilot.timer);
+  if (state.tab !== "pilot") return;
+  const [st, found] = await Promise.all([request("/api/reading/status"), request("/api/reading/results")]);
+  if (state.tab !== "pilot") return;
+  show(pilotProgress(st), pilotResults(found));
+  if (st.running) pilot.timer = setTimeout(() => watchPilot().catch(() => {}), 2000);
+}
+
+async function renderPilot() {
+  clearTimeout(pilot.timer);
+  const st = await request("/api/reading/status");
+  if (st.running || pilot.showProgress) { pilot.showProgress = true; return watchPilot(); }
+  if (!st.key.key_found) { show(keyPanel(renderPilot)); return; }
+  const query = new URLSearchParams({ year: pilot.year, people: pilot.people.join("|"), per_person: pilot.per_person });
+  const [plan, found] = await Promise.all([request("/api/reading/plan?" + query.toString()), request("/api/reading/results")]);
+  pilot.year = plan.year;
+  pilot.people = plan.people.map((p) => p.name);
+
+  const year = h("input", { type: "number", value: plan.year, min: "2000", max: "2100", "aria-label": "Year", class: "year" });
+  const names = [0, 1, 2].map((i) => h("input", { list: "contact-list", value: pilot.people[i] || "", placeholder: "Person " + (i + 1), autocomplete: "off", "aria-label": "Person " + (i + 1) }));
+  const size = h("select", { "aria-label": "Conversations per person" }, [20, 40, 60, 100].map((n) => h("option", { value: n, text: n + " conversations each" })));
+  size.value = String(plan.per_person);
+  const refresh = () => { pilot.year = year.value; pilot.people = names.map((n) => n.value.trim()).filter(Boolean); pilot.per_person = Number(size.value); renderPilot(); };
+
+  const nothingLeft = plan.models.every((m) => !m.units_to_read);
+  const send = async (button) => {
+    button.disabled = true;
+    try {
+      await post("/api/reading/start", { confirm: true, year: pilot.year, people: pilot.people, per_person: pilot.per_person });
+      pilot.showProgress = true;
+      watchPilot();
+    } catch (error) { button.disabled = false; sendOut.replaceChildren(h("p", { class: "error", text: error.message })); }
+  };
+  const sendOut = h("div", {});
+
+  show(
+    h("div", { class: "panel" }, h("h2", { text: "Reading pilot" }),
+      h("p", { text: "Three AI models each read the same sample of your real conversations and write a digest of every one: what it was about, how it felt, what happened, any friction, and what was promised. You then mark the digests right or wrong without being told which model wrote which. The result tells you which model to trust with your whole history, and what that will cost." }),
+      h("div", { class: "row" }, h("label", {}, "Year ", year), names, size, h("button", { text: "Update preview", onclick: refresh })),
+      h("p", { class: "small muted", text: "It starts with the three people you messaged most that year. Change any name to read someone else." })),
+    h("div", { class: "panel" }, h("h2", { text: "This is what would leave your Mac" }),
+      plan.units ? h("p", {}, h("strong", { text: fmt(plan.messages) + " messages" }), " in " + fmt(plan.units) + " conversations, from " + plan.first_day + " to " + plan.last_day +
+        ", would be sent to Anthropic and read by three models. Names appear as they do in your contacts. Other people's words are included.")
+        : h("p", { text: "No conversations were found for those people in " + plan.year + "." }),
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Person" }), h("th", { class: "n", text: "Messages that year" }), h("th", { class: "n", text: "Conversations that year" }),
+          h("th", { class: "n", text: "Conversations in the sample" }), h("th", { class: "n", text: "Messages in the sample" }))),
+        h("tbody", {}, plan.people.map((p) => h("tr", {}, h("td", { text: p.name }), h("td", { class: "n", text: fmt(p.messages_in_year) }), h("td", { class: "n", text: fmt(p.units_in_year) }),
+          h("td", { class: "n", text: fmt(p.units_chosen) }), h("td", { class: "n", text: fmt(p.messages_chosen) })))))),
+      h("div", { class: "spacer" }), h("h3", { text: "Estimated cost" }),
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Model" }), h("th", { class: "n", text: "Still to read" }), h("th", { class: "n", text: "Already read" }), h("th", { class: "n", text: "Rough estimate" }))),
+        h("tbody", {}, plan.models.map((m) => h("tr", {}, h("td", { text: m.name }), h("td", { class: "n", text: fmt(m.units_to_read) }), h("td", { class: "n", text: fmt(m.already_read) }), h("td", { class: "n", text: usd(m.estimated_cost_usd) })))))),
+      h("p", {}, "Rough total: ", h("strong", { text: usd(plan.estimated_cost_usd) }), ". Spent so far: " + usd(plan.spent_usd) + ". Cap: " + usd(plan.cap_usd) + "."),
+      h("p", { class: "small muted", text: "The estimate is a guess made without sending anything. Real cost is measured as it runs. The cap is a hard stop: before each request the app checks that even the dearest possible reply would still fit, and stops if not. A conversation already read is never paid for twice." }),
+      nothingLeft
+        ? h("p", { text: "Everything in this sample has been read." })
+        : h("button", { class: "primary", text: "Send these " + fmt(plan.units) + " conversations to the AI", disabled: !plan.units || plan.remaining_usd <= 0, onclick: (event) => send(event.currentTarget) }),
+      sendOut,
+      found.units_ready ? h("p", {}, h("button", { class: "link", text: "Review the digests already read", onclick: () => setTab("review") })) : null),
+    pilotResults(found));
+}
+
+/* One model's digest, shown under a letter instead of the model's name. */
+function digestCard(unitId, reading, onMarked) {
+  const d = reading.digest;
+  const list = (title, items, render) => items && items.length ? [h("h4", { text: title }), h("ul", { class: "tight" }, items.map((item) => h("li", { text: render(item) })))] : null;
+  const note = h("input", { type: "text", value: reading.note || "", placeholder: "Optional: what was wrong or missing", "aria-label": "Note for reading " + reading.slot });
+  const buttons = [["right", "Right"], ["missing", "Missing something"], ["wrong", "Wrong"]].map(([value, label]) =>
+    h("button", { type: "button", class: "verdict " + value + (reading.verdict === value ? " on" : ""), "aria-pressed": reading.verdict === value ? "true" : "false", text: label, onclick: async (event) => {
+      const pressed = event.currentTarget;      // read now: the browser clears it once the click has been handled
+      try {
+        await post("/api/reading/review", { unit_id: unitId, slot: reading.slot, verdict: value, note: note.value });
+        reading.verdict = value;
+        for (const b of buttons) { b.classList.toggle("on", b === pressed); b.setAttribute("aria-pressed", b === pressed ? "true" : "false"); }
+        onMarked();
+      } catch (error) { alertBox.textContent = error.message; }
+    } }));
+  const alertBox = h("p", { class: "error small" });
+  return h("div", { class: "reading-card" }, h("h3", { text: "Reading " + reading.slot }),
+    reading.status !== "ok"
+      ? h("p", { class: "muted", text: reading.status === "declined" ? "This model declined to read this conversation." : "This model's reply could not be read." })
+      : [h("p", { text: d.summary }),
+         h("p", {}, h("span", { class: "chip", text: d.closeness }), " ", d.tone),
+         d.topics.length ? h("div", { class: "chips" }, d.topics.map((t) => h("span", { class: "chip", text: t }))) : null,
+         list("What happened", d.events, (e) => e.date + ": " + e.what),
+         list("Friction", d.tensions, (t) => t.what + " (" + t.resolution + ")"),
+         list("Promises", d.promises, (p) => p.who + ": " + p.what),
+         d.people.length ? h("p", { class: "small" }, h("strong", { text: "People: " }), d.people.join(", ")) : null,
+         d.places.length ? h("p", { class: "small" }, h("strong", { text: "Places: " }), d.places.join(", ")) : null,
+         d.notable ? h("p", {}, h("strong", { text: "Worth remembering: " }), d.notable) : null],
+    reading.status === "ok" ? [h("div", { class: "row verdicts" }, buttons), note, alertBox] : null);
+}
+
+async function renderReview(unitId) {
+  const queue = await request("/api/reading/queue");
+  if (!queue.ready) {
+    show(h("div", { class: "panel" }, h("h2", { text: "Nothing to review yet" }),
+      h("p", { text: "Run the reading pilot first. Digests appear here as soon as at least two models have read a conversation." }),
+      h("button", { class: "primary", text: "Go to the pilot", onclick: () => setTab("pilot") })));
+    return;
+  }
+  const id = unitId || queue.next || queue.all[0];
+  const data = await request("/api/reading/unit?id=" + encodeURIComponent(id));
+  const position = queue.all.indexOf(id);
+  const progress = h("strong", { text: queue.reviewed + " of " + queue.wanted });
+  const refreshProgress = async () => { const q = await request("/api/reading/queue"); progress.textContent = q.reviewed + " of " + q.wanted; };
+  const go = (offset) => renderReview(queue.all[(position + offset + queue.all.length) % queue.all.length]);
+  show(
+    h("div", { class: "panel" }, h("h2", { text: "Review: " + data.unit.counterpart + ", " + (data.unit.first_day === data.unit.last_day ? data.unit.first_day : data.unit.first_day + " to " + data.unit.last_day) }),
+      h("p", {}, "Read the conversation on the left, then mark each reading. You are not told which model wrote which, and the letters are shuffled for every conversation. Marked so far: ", progress, " conversations wanted before choosing a model."),
+      h("div", { class: "row" }, h("button", { text: "Previous", onclick: () => go(-1) }), h("button", { text: "Skip", onclick: () => go(1) }),
+        h("button", { class: "primary", text: "Next unmarked", onclick: () => renderReview() }),
+        h("span", { class: "small muted", text: "Conversation " + (position + 1) + " of " + queue.all.length + " read so far." }))),
+    h("div", { class: "review-split" },
+      h("div", { class: "panel original" }, h("h3", { text: "The conversation (" + fmt(data.unit.messages) + " messages)" }),
+        h("div", { class: "original-scroll" }, data.messages.map((m) => messageNode(m, [])))),
+      h("div", { class: "readings" }, data.readings.map((r) => digestCard(id, r, refreshProgress)))));
+}
+
 /* Ready-made questions for the Ask AI screen. */
 const AI_PRESETS = {
   tone: "Describe the emotional tone of these messages and how it changes over time. Point out warm stretches, tense stretches and turning points, with dates. Note what each person tends to bring emotionally. Be candid but fair, and do not speculate beyond what the messages show.",
@@ -1101,7 +1292,7 @@ Object.assign(SCREENS, {
   search: renderSearch, topics: renderTopics,
   trends: renderTrends, replies: renderReplies, reactions: renderReactions, tone: renderTone, words: renderWords,
   expressions: renderExpressions, language: renderLanguage, sharing: renderSharing,
-  ask: renderAsk, connect: renderConnect,
+  ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(),
 });
 
 start();

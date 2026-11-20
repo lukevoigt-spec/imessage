@@ -21,7 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, activity, ai, extract, index, insights, labels, paths, query, science, signals, stats, topics, update
+from . import (__version__, activity, ai, claude_api, extract, index, insights, labels, paths, query, reading,
+               science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
 STATIC_FILES = {
@@ -245,6 +246,11 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/circles": lambda conn, p: science.circles(conn),
     "/api/labels": lambda conn, p: {"labels": labels.load(), "choices": list(labels.LABELS)},
     "/api/home": lambda conn, p: _home(conn),
+    "/api/reading/plan": lambda conn, p: _reading_plan(conn, p),
+    "/api/reading/status": lambda conn, p: reading.status(),
+    "/api/reading/results": lambda conn, p: reading.results(conn),
+    "/api/reading/queue": lambda conn, p: reading.review_queue(),
+    "/api/reading/unit": lambda conn, p: reading.unit_for_review(conn, p.get("id", "")),
 }
 
 
@@ -286,7 +292,40 @@ def _ai_topics(conn, body) -> dict:
     return ai.discover_topics(conn, q, filters, strategy)
 
 
+def _reading_args(p: dict) -> tuple:
+    people = p.get("people") or []
+    if isinstance(people, str):
+        people = [name for name in people.split("|") if name]
+    return [str(name) for name in people], str(p.get("year") or ""), int(p.get("per_person") or reading.UNITS_PER_PERSON)
+
+
+def _reading_plan(conn, p) -> dict:
+    planned = reading.plan(conn, *_reading_args(p))
+    planned.pop("_units")            # transcripts stay on the server; the page only needs the counts
+    planned["key"] = claude_api.status()
+    return planned
+
+
+def _reading_start(conn, body) -> dict:
+    # The confirm flag is set only by the button under the preview of what would be sent.
+    if body.get("confirm") is not True:
+        raise QueryError("Confirm the preview before sending conversations to the AI.")
+    return reading.start(conn, *_reading_args(body))
+
+
+def _save_key(conn, body) -> dict:
+    """Store the API key in the Keychain, then ask Anthropic (sending no messages) which models it may use."""
+    claude_api.save_key(str(body.get("key") or ""))
+    return {"saved": True, "models": claude_api.check_models(reading.MODELS)}
+
+
 POST_ROUTES: Dict[str, Callable] = {
+    "/api/key/save": _save_key,
+    "/api/key/check": lambda conn, b: {"models": claude_api.check_models(reading.MODELS)},
+    "/api/reading/start": _reading_start,
+    "/api/reading/stop": lambda conn, b: reading.stop(),
+    "/api/reading/review": lambda conn, b: reading.save_review(str(b.get("unit_id") or ""), str(b.get("slot") or ""),
+                                                               str(b.get("verdict") or ""), str(b.get("note") or "")),
     "/api/labels/save": _save_label,
     "/api/topics/save": lambda conn, b: {"saved": bool(topics.save(str(b.get("name") or ""), list(b.get("terms") or [])))},
     "/api/topics/delete": lambda conn, b: {"deleted": bool(topics.delete(str(b.get("name") or "")) is not None)},

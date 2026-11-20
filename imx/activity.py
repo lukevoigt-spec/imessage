@@ -2,7 +2,7 @@
 
 Each line records when, which feature, how many messages and which
 conversations were involved. It never records the message text itself.
-Shown on the Connect AI screen so you can always see what was shared.
+Shown on the Setup screen so you can always see what was shared.
 """
 
 from __future__ import annotations

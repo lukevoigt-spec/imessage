@@ -23,14 +23,13 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 import make_fixture  # noqa: E402
-from imx import activity, ai, index, mcp_server, paths, server  # noqa: E402
+from imx import activity, ai, claude_api, index, mcp_server, paths, server  # noqa: E402
 from imx.query import Filters, QueryError  # noqa: E402
 
 
-class FakeResponse:
+def FakeResponse():
     """Stands in for Anthropic's reply."""
-    model = "claude-opus-5-5"
-    stop_reason = "end_turn"
+    return {"model": "claude-opus-5-5", "stop_reason": "end_turn", "text": "", "usage": {}, "cost_usd": 0.0}
 
 
 class ServerTests(unittest.TestCase):
@@ -205,30 +204,29 @@ class ServerTests(unittest.TestCase):
         self.assertIn("Avery Stone", log)
         self.assertNotIn("dinner friday", log)                # the log never holds message text
 
-    def test_missing_library_gives_a_plain_message(self):
-        # In this test environment the anthropic library may or may not be installed;
-        # either way an unconfirmed or unconfigured request must fail with words, not a crash.
+    def test_missing_key_gives_a_plain_message(self):
+        # With no API key saved, a request must fail with words, not a crash, and nothing is sent.
         conn = index.connect(readonly=True)
+        saved_path = os.environ["PATH"]
+        os.environ["PATH"] = ""                               # no Keychain tool to find a key with
         try:
-            with self.assertRaises((ai.AIError, QueryError)):
-                saved = sys.modules.get("anthropic")
-                sys.modules["anthropic"] = None               # makes 'import anthropic' fail
-                try:
-                    ai.ask(conn, "anything?", "dinner", Filters(), "recent")
-                finally:
-                    if saved is not None:
-                        sys.modules["anthropic"] = saved
-                    else:
-                        sys.modules.pop("anthropic", None)
+            with self.assertRaises(ai.AIError) as caught:
+                ai.ask(conn, "anything?", "dinner", Filters(), "recent")
+            self.assertIn("API key", str(caught.exception))
         finally:
+            os.environ["PATH"] = saved_path
             conn.close()
 
-    def test_api_key_is_never_read_from_a_project_file(self):
-        source = (ROOT / "imx" / "ai.py").read_text(encoding="utf-8")
-        self.assertNotIn("open(", source)
-        self.assertNotIn("read_text", source)
-
-    # ---- connection for AI tools (MCP) -----------------------------------------------
+    def test_api_key_comes_only_from_the_environment_or_the_keychain(self):
+        saved_path = os.environ["PATH"]
+        os.environ["PATH"] = ""                               # no Keychain tool available
+        try:
+            self.assertIsNone(claude_api.api_key())           # nothing on disk is ever consulted
+            os.environ["ANTHROPIC_API_KEY"] = "sk-ant-from-the-environment"
+            self.assertEqual(claude_api.api_key(), "sk-ant-from-the-environment")
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ["PATH"] = saved_path
 
     def rpc(self, *requests):
         out = io.StringIO()

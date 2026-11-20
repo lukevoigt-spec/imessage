@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/lukevoigt-spec/imessage/main/instal
 
 ## Getting around
 
-Six sections across the top. Explanations of how each number is worked out sit behind a "How this is measured" link, so screens stay easy to scan.
+Seven sections across the top. Explanations of how each number is worked out sit behind a "How this is measured" link, so screens stay easy to scan.
 
 | Section | What is there |
 |---|---|
@@ -46,6 +46,7 @@ Six sections across the top. Explanations of how each number is worked out sit b
 | **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume |
 | **Search** | Find messages by words, phrases and filters; saved topics |
 | **Patterns** | Over time, replies and read times, reactions, tone, words and phrases, expressions and style, "we" against "I", and what gets shared |
+| **Reading** | Optional. Three AI models read a sample of your real conversations and write a digest of each; you mark them, blind, and see what a full read would cost |
 | **Ask AI** | Optional. Send a selection of messages to Claude with a question, after a preview and your confirmation |
 | **Setup** | Update or quit the app, connect an AI tool, see what your Mac records, and what has been shared with AI |
 
@@ -67,7 +68,7 @@ Home asks you to pin your inner circle the first time. Labels and pins are kept 
 - Apple's Messages database is only ever **read**. This tool cannot change or delete your messages.
 - Your searchable copy is stored in `~/.imessage-explorer`, **outside this folder**, so message data cannot be committed to GitHub by accident.
 - The interface is reachable only from this Mac, and only by the browser tab the tool opens.
-- Message text leaves the Mac in exactly two cases: you confirm an **Ask AI** request, or an AI tool **you connected** runs a search. Both are listed, without the message text, on the Setup screen.
+- Message text leaves the Mac in exactly two cases: you confirm a **Reading** or **Ask AI** request, or an AI tool **you connected** runs a search. Both are listed, without the message text, on the Setup screen.
 - The only other time the app uses the internet is when you press **Check for a newer version** or **Update the app**. That asks GitHub which version is published and downloads the code. Nothing about you or your messages is sent.
 - Your messages include other people's words. Sharing them with an AI service shares their words too.
 
@@ -116,21 +117,31 @@ someone@example.com,Jordan Pike
 | `flight -work` | "flight" but not "work" |
 | `vacat*` | words starting with "vacat" |
 
+## Reading: have AI read your conversations (optional)
+
+Counting cannot tell you what a conversation was about, how it felt, or what was left unresolved. Reading can. The **Reading** section runs a pilot:
+
+1. Three Claude models (Haiku, Sonnet and Opus) each read the same sample of your real conversations: by default 40 stretches of conversation with each of the three people you messaged most in the last full year.
+2. Each writes a digest: a summary, topics, how it read emotionally, what happened, any friction and how it ended, promises made, and people and places named.
+3. On **Review digests** you read the original conversation beside the three digests and mark each one right, missing something, or wrong. You are not told which model wrote which, and the letters are shuffled for every conversation, so your marks are not swayed by a model's name.
+4. The pilot screen then shows what each model cost and what reading your whole history would cost with each.
+
+Safeguards:
+
+- Nothing is sent until you have seen exactly what would be sent and pressed the button.
+- A hard spending cap of $30. Before every request the app checks that even the dearest possible reply would still fit, and stops if not.
+- A conversation that has been read is never paid for twice. You can stop and continue later.
+- Digests and the record of spending are kept in their own file in `~/.imessage-explorer`, untouched by bringing in new messages.
+
+## Your Anthropic key
+
+Reading and Ask AI use the Anthropic API, which is **billed per use against the credit on your Anthropic account and is separate from a Claude subscription**.
+
+The first time you open Reading or Ask AI, the app asks for a key: sign in at console.anthropic.com, create an API key, and paste it in. Nothing has to be installed and nothing is typed in Terminal. The key is stored in this Mac's Keychain, never in a file. Saving it sends no messages; it only asks Anthropic whether the key works.
+
 ## Ask AI (optional)
 
-This uses the Anthropic API, which is **billed per request and is separate from a Claude subscription**. A typical question over a few hundred messages costs a few cents. The Ask AI screen shows an estimate before anything is sent.
-
-1. Install the library: `python3 -m pip install anthropic`
-2. Create an API key at console.anthropic.com.
-3. Store the key in the macOS Keychain. Run this and paste the key when asked:
-
-   ```
-   security add-generic-password -a "$USER" -s imessage-explorer-anthropic -w
-   ```
-
-4. Quit iMessage Explorer and open it again.
-
-The key is never written to a file in this folder. One request is limited to 1,500 messages or 200,000 characters. If more match, the screen says how many are left out and you choose which to send or narrow the filters. If the AI declines a request, the service may retry it on its fallback model automatically.
+Ask a question about a selection of messages. A typical question over a few hundred messages costs a few cents, and the screen shows an estimate before anything is sent. One request is limited to 1,500 messages or 200,000 characters. If more match, the screen says how many are left out and you choose which to send or narrow the filters. If the AI declines a request, the service may retry it on its fallback model automatically.
 
 ## Connect an AI tool (optional)
 
@@ -142,7 +153,7 @@ Anything a connected tool retrieves is sent on to that tool's AI service.
 
 ## Removing it
 
-Drag iMessage Explorer from Applications to the Trash. To also remove its code, delete the folder `~/Library/Application Support/iMessage Explorer`. To remove your local database, labels and topics as well, delete the folder `~/.imessage-explorer`. Your real messages are untouched. To remove the API key: `security delete-generic-password -s imessage-explorer-anthropic`.
+Drag iMessage Explorer from Applications to the Trash. To also remove its code, delete the folder `~/Library/Application Support/iMessage Explorer`. To remove your local database, labels and topics as well, delete the folder `~/.imessage-explorer`. Your real messages are untouched. To remove the API key, open the Keychain Access app, search for `imessage-explorer-anthropic`, and delete it.
 
 ## Command line (optional)
 
@@ -159,7 +170,7 @@ To try the app on made-up data without touching real messages, run `python3 test
 
 ## For whoever maintains this
 
-- Code is in `imx/`. No third-party packages except the optional `anthropic`.
+- Code is in `imx/`. No third-party packages. Requests to Anthropic are made directly by `imx/claude_api.py`, through the Mac's own `curl`, so nothing has to be installed.
 - Tests: `python3 -m unittest discover -s tests`. They use only fictional data and never contact Anthropic.
 - The `main` branch is the published version: the installer and the in-app update both install it. Do unfinished work on another branch, and raise the version number in `imx/__init__.py` when publishing. `imx/update.py` explains how updating works.
 - The sentiment word list in `imx/data/vader_lexicon.txt` comes from VADER 3.3.2 by C.J. Hutto and Eric Gilbert, used under the MIT licence in `imx/data/VADER_LICENSE.txt`.

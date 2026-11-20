@@ -185,3 +185,21 @@ details.definition { border-left: 3px solid var(--line); padding-left: 10px; mar
 details.definition summary { cursor: pointer; color: var(--accent); width: fit-content; }
 details.definition p { margin: 6px 0 0; }
 .tag { white-space: nowrap; }
+
+/* Reading: digests side by side with the conversation they describe */
+.review-split { display: grid; grid-template-columns: minmax(280px, 2fr) 3fr; gap: 16px; align-items: start; }
+.original { position: sticky; top: 8px; }
+.original-scroll { max-height: 78vh; overflow-y: auto; padding-right: 6px; }
+.readings { display: grid; gap: 12px; }
+.reading-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.reading-card h3 { margin-top: 0; }
+.reading-card h4 { margin: 10px 0 2px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.reading-card input[type="text"] { width: 100%; margin-top: 8px; }
+ul.tight { margin: 0; padding-left: 18px; }
+.verdicts { margin-top: 12px; }
+button.verdict.on { color: #fff; border-color: transparent; }
+button.verdict.right.on { background: var(--good); }
+button.verdict.missing.on { background: #b7791f; }
+button.verdict.wrong.on { background: var(--bad); }
+@media (max-width: 900px) { .review-split { grid-template-columns: 1fr; } .original { position: static; } .original-scroll { max-height: 45vh; } }
+input.year { width: 90px; }

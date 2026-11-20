@@ -10,22 +10,20 @@ this module follows:
 - Every request is written to the local activity log (counts only, no text).
 - Message text is treated as data. Instructions inside a message are ignored.
 
-Requires the `anthropic` package and an Anthropic API key (billed per use,
-separate from a Claude subscription). The key is read from the macOS Keychain
-or the ANTHROPIC_API_KEY environment variable, never from a file in this repo.
+Needs an Anthropic API key (billed per use, separate from a Claude subscription),
+which you add inside the app. Requests are sent by `claude_api.py`; nothing has
+to be installed.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-import subprocess
-import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from . import activity
+from . import activity, claude_api
+from .claude_api import AIError  # noqa: F401  (other modules import it from here)
 from .query import Filters, QueryError, build_match
 
 MODEL = "claude-opus-5-5"
@@ -40,7 +38,6 @@ MAX_CHARS = 200_000
 INPUT_DOLLARS_PER_MILLION_TOKENS = 4.00
 CHARS_PER_TOKEN_ESTIMATE = 3.5
 
-KEYCHAIN_SERVICE = "imessage-explorer-anthropic"
 STRATEGIES = ("recent", "oldest", "spread")
 
 SYSTEM_PROMPT = (
@@ -76,42 +73,14 @@ TOPIC_SCHEMA = {
 }
 
 
-class AIError(Exception):
-    """An AI request could not be completed. The message says why, plainly."""
-
-
-def _api_key() -> Optional[str]:
-    """Find the API key: environment first, then the macOS Keychain. Never a file."""
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        return key
-    if sys.platform == "darwin":
-        try:
-            result = subprocess.run(
-                ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            pass
-    return None
-
-
 def status() -> Dict[str, object]:
     """Whether the AI features are ready, and if not, what is missing."""
-    try:
-        import anthropic  # noqa: F401
-        sdk = True
-    except ImportError:
-        sdk = False
     return {
-        "sdk_installed": sdk,
-        "key_found": _api_key() is not None,
+        "key_found": claude_api.api_key() is not None,
+        "can_store_key": claude_api.status()["can_store_key"],
         "model": MODEL,
         "max_messages": MAX_MESSAGES,
         "max_chars": MAX_CHARS,
-        "keychain_service": KEYCHAIN_SERVICE,
     }
 
 
@@ -197,49 +166,13 @@ def preview(conn: sqlite3.Connection, query: str, filters: Filters, strategy: st
     }
 
 
-def _client():
-    try:
-        import anthropic
-    except ImportError:
-        raise AIError("The AI features need one extra install. In Terminal run:  python3 -m pip install anthropic")
-    key = _api_key()
-    # With no key found here, the SDK still checks its own sign-in profile before giving up.
-    return anthropic, (anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic())
-
-
 def _call(user_content: str, schema: Optional[dict] = None):
-    """Send one request to Claude and return the response, turning failures into plain messages."""
-    anthropic, client = _client()
-    output_config: Dict[str, object] = {"effort": EFFORT}
-    if schema is not None:
-        output_config["format"] = {"type": "json_schema", "schema": schema}
-    try:
-        response = client.beta.messages.create(
-            model=MODEL,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            # If the model declines a request, let the service retry it on its default fallback model.
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            system=SYSTEM_PROMPT,
-            output_config=output_config,
-            messages=[{"role": "user", "content": user_content}],
-        )
-    except anthropic.AuthenticationError:
-        raise AIError("The Anthropic API key was missing or not accepted. See the Connect AI screen for setup.")
-    except anthropic.PermissionDeniedError:
-        raise AIError("This Anthropic API key is not allowed to use the model %s." % MODEL)
-    except anthropic.RateLimitError:
-        raise AIError("Anthropic is rate-limiting this key right now. Wait a minute and try again.")
-    except anthropic.BadRequestError as exc:
-        raise AIError("Anthropic rejected the request: %s" % exc.message)
-    except anthropic.APIStatusError as exc:
-        raise AIError("Anthropic returned an error (%s). Try again later." % exc.status_code)
-    except anthropic.APIConnectionError:
-        raise AIError("Could not reach Anthropic. Check the internet connection.")
-    if response.stop_reason == "refusal":
+    """Send one request to Claude and return (reply, text), turning failures into plain messages."""
+    reply = claude_api.send_patiently(MODEL, SYSTEM_PROMPT, user_content, schema=schema, effort=EFFORT,
+                                      max_tokens=MAX_OUTPUT_TOKENS, fallbacks=True, attempts=3)
+    if reply["stop_reason"] == "refusal":
         raise AIError("The AI declined to answer this request.")
-    text = "".join(block.text for block in response.content if block.type == "text").strip()
-    return response, text
+    return reply, str(reply["text"])
 
 
 def _transcript(lines: List[str]) -> str:
@@ -257,13 +190,13 @@ def ask(conn: sqlite3.Connection, question: str, query: str, filters: Filters,
         raise QueryError("No messages match, so there is nothing to ask about.")
     response, text = _call("%s\n\nQuestion: %s" % (_transcript(chosen["lines"]), question))
     activity.record("ask_ai", messages_sent=len(chosen["rows"]), characters=chosen["chars"],
-                    conversations=chosen["people"], model=response.model)
+                    conversations=chosen["people"], model=response["model"])
     return {
         "answer": text,
-        "cut_short": response.stop_reason == "max_tokens",
+        "cut_short": response["stop_reason"] == "max_tokens",
         "messages_sent": len(chosen["rows"]),
         "total_matching": chosen["total_matching"],
-        "model": response.model,
+        "model": response["model"],
     }
 
 
@@ -285,10 +218,10 @@ def discover_topics(conn: sqlite3.Connection, query: str, filters: Filters,
     except (ValueError, KeyError, TypeError):
         raise AIError("The AI's topic list came back in an unreadable form. Try again.")
     activity.record("find_topics", messages_sent=len(chosen["rows"]), characters=chosen["chars"],
-                    conversations=chosen["people"], model=response.model)
+                    conversations=chosen["people"], model=response["model"])
     return {
         "topics": topics,
         "messages_sent": len(chosen["rows"]),
         "total_matching": chosen["total_matching"],
-        "model": response.model,
+        "model": response["model"],
     }
