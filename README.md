@@ -43,7 +43,7 @@ Eight sections across the top. Explanations of how each number is worked out sit
 | Section | What is there |
 |---|---|
 | **Home** | Your inner circle, what has changed lately, and where to go next |
-| **Me** | A portrait of you drawn from everything read so far, ten trait scores as spider charts (overall and per person), charts of how your conversations felt over time, a plan for you and your partner with a free monthly check, a reality check of your goals for the next decade, and lines for your memory file |
+| **Me** | A portrait of you drawn from everything read so far, ten trait scores as spider charts (overall and per person), charts of how your conversations felt over time, a plan for you and your partner with a free monthly check, a reality check of your goals for the next decade, lines for your memory file, and a report of all of it to read offline |
 | **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume; the automated senders that were set aside |
 | **Search** | Find messages by words, phrases and filters; saved topics |
 | **Patterns** | Over time, replies and read times, reactions, tone, words and phrases, expressions and style, "we" against "I", and what gets shared |
@@ -154,6 +154,15 @@ Three more screens in the **Me** section turn what was read into action. All thr
 - **Next decade.** Not a new plan: your goals, set against what your messages show. Each goal is marked as supported, contradicted, mixed, or not visible in texts (health, money and most of work are not). Then what looks most at risk, where goals pull against each other, patterns to watch with their early warning signs, milestones, and at most three moves for the first ninety days.
 - **Lines for your memory file** from the plans are marked private, on the page and in the copied text.
 - **The cap.** $25 for plans, inside the $300 cap on the whole project.
+
+### A report to read offline
+
+**Me → Report** makes one file holding everything the app has worked out: the key numbers, your portrait and its quotes, the trait scores and spider charts, the charts over time, the plan with your partner, the monthly check and any months read, the decade check, every relationship history and the accuracy check. You can leave sections out.
+
+- It is a single web page with its charts inside it. It opens in Safari or Chrome without internet and runs no scripts. To make a PDF: File, Print, Save as PDF; each section starts on a new page.
+- Each point that rests on numbered conversations links to an appendix at the back giving that stretch's dates, how it felt and its digest summary. The messages themselves are not in the file, though a summary can include a short phrase the model quoted.
+- It is made on your Mac at no cost. Nothing is sent anywhere.
+- The file is not encrypted. Keep it somewhere only you can reach.
 
 ### Histories
 

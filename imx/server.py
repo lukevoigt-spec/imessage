@@ -22,7 +22,7 @@ from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from . import (__version__, activity, ai, check, claude_api, extract, fullread, histories, index, insights, junk, labels, paths,
-               plans, portrait, query, reading,
+               plans, portrait, query, reading, report,
                science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
@@ -262,6 +262,8 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/plans/plan": lambda conn, p: _without(plans.plan(conn, p.get("what", ""), p.get("month", "")), "_item"),
     "/api/plans/read": lambda conn, p: plans.read(p.get("what", ""), p.get("label", "")),
     "/api/plans/goals": lambda conn, p: plans.goals(),
+    "/api/report": lambda conn, p: report.build(conn, [s for s in p.get("sections", "").split(",") if s] if "sections" in p else None),
+    "/api/report/contents": lambda conn, p: {"sections": report.contents()},
     "/api/plans/measures": lambda conn, p: plans.measures(conn),
     "/api/plans/months": lambda conn, p: {"read": plans.months_read(), "can_read": plans.finished_months(conn)},
     "/api/check/plan": lambda conn, p: _without(check.plan(conn, int(p.get("size") or check.SAMPLE)), "_items"),

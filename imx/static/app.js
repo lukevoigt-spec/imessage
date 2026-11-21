@@ -559,7 +559,7 @@ async function renderConnect() {
 /* Six sections. Each holds one or more screens. */
 const NAV = [
   { id: "home", label: "Home", screens: [["home", "Home"]] },
-  { id: "me", label: "Me", screens: [["me", "Portrait"], ["traits", "Traits"], ["mecharts", "Over time"], ["partner", "Partner"], ["monthly", "Monthly check"], ["decade", "Next decade"], ["goals", "Your goals"], ["brain", "For brain"]] },
+  { id: "me", label: "Me", screens: [["me", "Portrait"], ["traits", "Traits"], ["mecharts", "Over time"], ["partner", "Partner"], ["monthly", "Monthly check"], ["decade", "Next decade"], ["goals", "Your goals"], ["brain", "For brain"], ["report", "Report"]] },
   { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"], ["hidden", "Hidden senders"]] },
   { id: "search", label: "Search", screens: [["search", "Search"], ["topics", "Topics"]] },
   { id: "patterns", label: "Patterns", screens: [["trends", "Over time"], ["replies", "Replies"], ["reactions", "Reactions"], ["tone", "Tone"], ["words", "Words"], ["expressions", "Expressions"], ["language", "We and I"], ["sharing", "Sharing"]] },
@@ -568,7 +568,7 @@ const NAV = [
   { id: "setup", label: "Setup", screens: [["connect", "Setup"]] },
 ];
 /* Screens that always use your whole history, so the filter bar is hidden on them. */
-const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests", "histories", "accuracy", "me", "traits", "mecharts", "brain", "partner", "monthly", "decade", "goals"]);
+const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests", "histories", "accuracy", "me", "traits", "mecharts", "brain", "partner", "monthly", "decade", "goals", "report"]);
 const lastScreen = {};
 const SCREENS = {};
 
@@ -2365,6 +2365,45 @@ async function renderGoals() {
     box, h("div", { class: "row" }, h("button", { class: "primary", text: "Save", onclick: (event) => save(event.currentTarget) }), count, out)));
 }
 
+/* ---------- Report: everything in one file, to read offline ---------- */
+
+async function renderReport() {
+  loading();
+  const d = await request("/api/report/contents");
+  const boxes = d.sections.map((s) => {
+    const box = h("input", { type: "checkbox", "data-key": s.key });
+    box.checked = true;
+    return { s, box };
+  });
+  const out = h("div", {});
+  const make = async (button) => {
+    const chosen = boxes.filter((b) => b.box.checked).map((b) => b.s.key);
+    if (!chosen.length) { out.replaceChildren(h("p", { class: "error", text: "Choose at least one section." })); return; }
+    button.disabled = true;
+    out.replaceChildren(h("p", { class: "muted", text: "Making the report…" }));
+    try {
+      const r = await request("/api/report?" + new URLSearchParams({ sections: chosen.join(",") }).toString(), { always: true });
+      const url = URL.createObjectURL(new Blob([r.html], { type: "text/html" }));
+      const link = h("a", { href: url, download: r.filename, text: "Save it again" });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      out.replaceChildren(
+        h("p", {}, "Saved as ", h("strong", { text: r.filename }), " (" + (r.bytes / 1048576).toFixed(1) + " MB), usually in your Downloads folder. Open it in Safari or Chrome; it works without internet. To make a PDF: File, Print, then Save as PDF."),
+        r.evidence ? h("p", { class: "small muted", text: fmt(r.evidence) + " pieces of evidence are listed at the back, each linked from the point that cites it." }) : null,
+        r.problems.length ? h("div", { class: "notice", text: "Some parts could not be made: " + r.problems.join("; ") }) : null,
+        h("a", { href: url, download: r.filename, class: "small", text: "Save it again" }));
+    } catch (error) { out.replaceChildren(h("p", { class: "error", text: error.message })); }
+    button.disabled = false;
+  };
+  show(h("div", { class: "panel" }, h("h2", { text: "A report to read offline" }),
+    h("p", { text: "Everything the app has worked out, in one file: the key numbers, your portrait and traits, the charts, the plan with your partner and the monthly check, the decade check, every relationship history and the accuracy check. It opens in any browser without internet and prints to PDF with each section on a new page. It is made on this Mac at no cost: nothing is sent anywhere." }),
+    h("div", { class: "notice", text: "The file is not encrypted and holds the most personal things the app makes. Keep it somewhere only you can reach. Evidence is given as the dates and summaries of the conversations each point rests on; the messages themselves are not in the file." }),
+    h("h3", { text: "What to include" }),
+    h("div", { class: "report-boxes" }, boxes.map(({ s, box }) => h("label", {}, box, " " + s.title, s.ready ? null : h("span", { class: "small muted", text: " (not written yet: it will say so)" })))),
+    h("div", { class: "row" }, h("button", { class: "primary", text: "Make the report", onclick: (event) => make(event.currentTarget) })), out));
+}
+
 /* Ready-made questions for the Ask AI screen. */
 const AI_PRESETS = {
   tone: "Describe the emotional tone of these messages and how it changes over time. Point out warm stretches, tense stretches and turning points, with dates. Note what each person tends to bring emotionally. Be candid but fair, and do not speculate beyond what the messages show.",
@@ -2380,7 +2419,7 @@ Object.assign(SCREENS, {
   ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(), hidden: renderHidden,
   full: renderFull, digests: renderDigests, histories: renderHistories, accuracy: renderAccuracy,
   me: renderMe, traits: renderTraits, mecharts: renderMeCharts, brain: renderBrain,
-  partner: renderPartner, monthly: renderMonthly, decade: renderDecade, goals: renderGoals,
+  partner: renderPartner, monthly: renderMonthly, decade: renderDecade, goals: renderGoals, report: renderReport,
 });
 
 start();
