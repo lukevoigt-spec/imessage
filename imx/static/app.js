@@ -536,7 +536,7 @@ async function renderConnect() {
       meta.activity.length ? h("div", { class: "scroll" }, h("table", {},
         h("thead", {}, h("tr", {}, h("th", { text: "When" }), h("th", { text: "What" }), h("th", { class: "n", text: "Messages" }), h("th", { text: "Conversations" }))),
         h("tbody", {}, meta.activity.map((e) => h("tr", {}, h("td", { text: e.when }),
-          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : e.kind === "full_read" ? "Full read" : e.kind === "accuracy_check" ? "Accuracy check" : e.kind === "histories" ? "Histories (digests only)" : e.kind === "portrait" ? "Portrait (digests and your own messages)" : "Find topics" }),
+          h("td", { text: e.kind === "connected_tool" ? "Connected tool: " + e.tool + (e.query ? ' "' + e.query + '"' : "") : e.kind === "ask_ai" ? "Ask AI" : e.kind === "reading_pilot" ? "Reading pilot" : e.kind === "full_read" ? "Full read" : e.kind === "accuracy_check" ? "Accuracy check" : e.kind === "histories" ? "Histories (digests only)" : e.kind === "portrait" ? "Portrait (digests and your own messages)" : e.kind === "plan" ? (e.what === "month" ? "Monthly reading " + e.month + " (messages with one person)" : e.what === "decade" ? "Reality check (your goals, portrait and notes)" : "Plan (digests, history and your goals)") : "Find topics" }),
           h("td", { class: "n", text: fmt(e.messages_sent !== undefined ? e.messages_sent : e.messages_returned) }),
           h("td", { text: (e.conversations || []).join(", ") }))))))
         : h("p", { class: "muted", text: "Nothing yet. Every AI request and connected-tool search will be listed here, without the message text." })),
@@ -559,7 +559,7 @@ async function renderConnect() {
 /* Six sections. Each holds one or more screens. */
 const NAV = [
   { id: "home", label: "Home", screens: [["home", "Home"]] },
-  { id: "me", label: "Me", screens: [["me", "Portrait"], ["traits", "Traits"], ["mecharts", "Over time"], ["brain", "For brain"]] },
+  { id: "me", label: "Me", screens: [["me", "Portrait"], ["traits", "Traits"], ["mecharts", "Over time"], ["partner", "Partner"], ["monthly", "Monthly check"], ["decade", "Next decade"], ["goals", "Your goals"], ["brain", "For brain"]] },
   { id: "people", label: "People", screens: [["ranking", "Your people"], ["circles", "Circles"], ["profile", "Profile"], ["people", "All conversations"], ["hidden", "Hidden senders"]] },
   { id: "search", label: "Search", screens: [["search", "Search"], ["topics", "Topics"]] },
   { id: "patterns", label: "Patterns", screens: [["trends", "Over time"], ["replies", "Replies"], ["reactions", "Reactions"], ["tone", "Tone"], ["words", "Words"], ["expressions", "Expressions"], ["language", "We and I"], ["sharing", "Sharing"]] },
@@ -568,7 +568,7 @@ const NAV = [
   { id: "setup", label: "Setup", screens: [["connect", "Setup"]] },
 ];
 /* Screens that always use your whole history, so the filter bar is hidden on them. */
-const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests", "histories", "accuracy", "me", "traits", "mecharts", "brain"]);
+const UNFILTERED = new Set(["home", "ranking", "circles", "profile", "connect", "pilot", "review", "hidden", "full", "digests", "histories", "accuracy", "me", "traits", "mecharts", "brain", "partner", "monthly", "decade", "goals"]);
 const lastScreen = {};
 const SCREENS = {};
 
@@ -2023,7 +2023,7 @@ async function renderBrain() {
   const d = await request("/api/me/brain");
   if (!d.total) {
     show(h("div", { class: "panel" }, h("h2", { text: "No lines yet" }),
-      h("p", { text: "Lines for your memory file are written together with the portrait." }),
+      h("p", { text: "Lines for your memory file are written together with the portrait and the plans." }),
       h("button", { class: "primary", text: "Go to the portrait", onclick: () => setTab("me") })));
     return;
   }
@@ -2067,7 +2067,302 @@ async function renderBrain() {
       h("div", { class: "notice", text: "A memory file is read by every AI assistant you connect to it. Tick a line about another person only if you are content for those services to hold it." }),
       h("p", {}, "Confirmed so far: ", counter, " lines."),
       h("div", { class: "row" }, h("button", { class: "primary", text: "Copy the confirmed lines", onclick: copy })), out),
-    d.sections.map((section) => h("div", { class: "panel" }, h("h3", { text: section.name }), section.lines.map(lineNode))));
+    d.sections.some((section) => section.private) ? h("div", { class: "panel" }, h("p", { class: "small", text: "Sections marked private come from the plans. The copied text marks them too, so they can be kept apart from anything shared." })) : null,
+    d.sections.map((section) => h("div", { class: "panel" }, h("h3", {}, section.name, section.private ? h("span", { class: "tag low", text: "private" }) : null), section.lines.map(lineNode))));
+}
+
+/* ---------- Plans: a few things to do, drawn from everything read ---------- */
+
+const planView = { timer: null, month: "" };
+const STRENGTH_TAG = { "well-established": "high", "supported": "medium", "expert practice": "low" };
+
+function planProgress(st, rerender) {
+  const busy = st.active || st.being_written > 0;
+  if (!busy && !st.problem && !st.problems.length && (!st.ended || st.ended === "finished")) return null;
+  const headline = busy ? "Writing" : st.ended === "stopped at the cap" ? "Stopped at the spending cap" : st.ended === "stopped by you" ? "Stopped"
+    : st.ended === "finished" ? "Finished" : "Stopped by a problem";
+  return h("div", { class: "panel" }, h("h2", { text: headline }),
+    busy ? h("p", {}, h("strong", { text: "Right now: " }), (st.stage || "Waiting") + ". It usually comes back within an hour. You can quit the app; open it again later and it carries on.") : null,
+    st.problem ? h("div", { class: "notice" }, h("strong", { text: "Problem: " }), st.problem) : null,
+    st.problems.length ? h("p", { class: "small muted", text: "Not written: " + st.problems.map((p) => p.problem.replace("plan: ", "") + " (" + p.times + ")").join("; ") + "." }) : null,
+    h("p", { class: "small muted", text: "Spent on plans: " + usd(st.spent_usd) + " of " + usd(st.cap_usd) + "." }),
+    busy ? h("button", { text: "Stop", onclick: async () => { await post("/api/plans/stop", {}); rerender(); } }) : null);
+}
+
+function planRefresh(st, tab, rerender) {
+  clearTimeout(planView.timer);
+  if (st.active || st.being_written > 0) planView.timer = setTimeout(() => { if (state.tab === tab) rerender().catch(() => {}); }, 5000);
+}
+
+/* What one request would send and cost, and the button that sends it after you have read that. */
+async function planOffer(what, month, label, rerender) {
+  const p = await request("/api/plans/plan?" + new URLSearchParams({ what, month: month || "" }).toString());
+  if (p.blockers.length) return h("div", { class: "notice", text: p.blockers.join(" ") });
+  const out = h("div", {});
+  const goalsLine = p.has_goals ? "your goals text (" + fmt(p.goals_characters) + " characters, as you pasted it)" : null;
+  const sent = what === "partner"
+    ? [fmt(p.included) + " of the " + fmt(p.digests) + " digests of your conversations with " + p.partner + ": every one with friction that fits (" + fmt(p.friction_included) + " of " + fmt(p.friction) + "), then the most recent of the rest",
+       "your relationship history with " + p.partner, "the monthly counts with " + p.partner, p.has_portrait ? "your portrait" : null, goalsLine]
+    : what === "decade"
+      ? [goalsLine, "your portrait", "the notes on each year", "the relationship histories, condensed", p.partner ? "the monthly counts with " + p.partner : null]
+      : [fmt(p.messages) + " messages with " + p.partner + " from " + month + ", both sides, word for word", "the plan's first-month actions and recurring moments", "that month's counts"];
+  const begin = async (button) => {
+    button.disabled = true;
+    try { await post("/api/plans/start", { confirm: true, what, month: month || "" }); rerender(); }
+    catch (error) { button.disabled = false; out.replaceChildren(h("p", { class: "error", text: error.message })); }
+  };
+  return h("div", {},
+    h("h3", { text: "This is what would leave your Mac" }),
+    h("ul", {}, sent.filter(Boolean).map((line) => h("li", { text: line }))),
+    what !== "month" && !p.has_goals ? h("p", { class: "small muted" }, "You have not pasted your goals. The result is much better with them. ",
+      h("button", { class: "link", text: "Add your goals", onclick: () => setTab("goals") })) : null,
+    h("p", {}, "Read by " + p.writer + ", about " + fmt(p.characters) + " characters. Estimated cost: ", h("strong", { text: usd(p.estimated_cost_usd) }),
+      ". Spent on plans so far: " + usd(p.spent_usd) + " of " + usd(p.cap_usd) + "."),
+    h("p", { class: "small muted", text: "The whole project has spent " + usd(p.project_spent_usd) + " of its " + usd(p.project_cap_usd) + " budget, and plans will not take it past that." }),
+    h("button", { class: "primary", text: label, disabled: p.remaining_usd < p.estimated_cost_usd, onclick: (event) => begin(event.currentTarget) }), out);
+}
+
+function partnerChooser(st, rerender) {
+  const select = h("select", { "aria-label": "Who the plan is about" }, h("option", { value: "", text: "Choose…" }),
+    st.partner_choices.map((name) => h("option", { value: name, text: name })));
+  select.value = st.partner;
+  select.addEventListener("change", async () => { await post("/api/plans/partner", { name: select.value }); rerender(); });
+  return h("label", { class: "small" }, "About ", select);
+}
+
+function evidenceList(title, list, render, look) {
+  if (!list || !list.length) return null;
+  return h("div", { class: "panel" }, h("h3", { text: title }), list.map((item) => h("div", { class: "claim" }, render(item), look ? refLinks(item.refs, look) : null)));
+}
+
+async function renderPartner() {
+  loading();
+  const st = await request("/api/plans/status");
+  if (!st.key.key_found) { show(keyPanel(renderPartner)); return; }
+  planRefresh(st, "partner", renderPartner);
+  if (!st.partner_choices.length) {
+    show(h("div", { class: "panel" }, h("h2", { text: "No relationship histories yet" }),
+      h("p", { text: "A plan for you and your partner stands on your history together. Write the histories first." }),
+      h("button", { class: "primary", text: "Go to histories", onclick: () => setTab("histories") })));
+    return;
+  }
+  const d = st.partner ? await request("/api/plans/read?what=partner") : { body: null };
+  if (!d.body) {
+    show(planProgress(st, renderPartner),
+      h("div", { class: "panel" }, h("h2", { text: st.partner ? "A plan for you and " + st.partner : "A plan for you and your partner" }),
+        h("p", { text: "Your history together, the stretches where there was friction, your portrait, your own goals and the monthly counts, read together and turned into a few things to do. What relationship research says matters is matched to what your messages show, with how firm each piece of research is. It names at most three things to do in the first month, says what to try in the moments that keep coming back, and cites the conversations behind every point. It is written for you alone." }),
+        h("div", { class: "row" }, partnerChooser(st, renderPartner)),
+        st.partner && !(st.active || st.being_written) ? await planOffer("partner", "", "Write the plan", renderPartner) : null));
+    return;
+  }
+  const g = d.body, look = d.refs, name = d.label;
+  const strength = (s) => h("span", { class: "tag " + (STRENGTH_TAG[s] || "low"), text: s });
+  show(planProgress(st, renderPartner),
+    h("div", { class: "panel" }, h("h2", { text: "You and " + name + ": a plan" }), h("p", { class: "lead", text: g.in_brief }),
+      h("p", { class: "small muted", text: "Written by " + d.written_by + " on " + d.written_at + ", for you alone. It is a model's reading of digests and histories that other models wrote, so test each point against what you know. The numbers under a point open the conversation behind it. Texting is only part of a marriage." }),
+      h("div", { class: "row" }, partnerChooser(st, renderPartner), h("button", { text: "Monthly check", onclick: () => setTab("monthly") }))),
+    h("div", { class: "panel" }, h("h3", { text: "Start here: the first month" }),
+      h("p", { class: "small muted", text: "At most three. Habits hold when they have a fixed time and place, so each is tied to one." }),
+      h("div", { class: "action-grid" }, g.first_month.map((a, i) => h("div", { class: "action-card" },
+        h("div", { class: "action-number", text: String(i + 1) }), h("h4", { text: a.action }),
+        h("p", {}, h("strong", { text: "When: " }), a.when), h("p", {}, h("strong", { text: "Why: " }), a.why),
+        h("p", {}, h("strong", { text: "How you will know: " }), a.how_you_will_know),
+        a.measure && a.measure !== "none" ? h("button", { class: "link small", text: "Watch: " + a.measure, onclick: () => setTab("monthly") }) : null)))),
+    evidenceList("When this happens", g.moments, (m) => [h("h4", { text: m.when }),
+      h("p", {}, h("strong", { text: "You tend to: " }), m.you_tend_to), h("p", {}, h("strong", { text: "Try instead: " }), m.try_instead),
+      m.words_that_work ? h("div", {}, h("blockquote", { text: m.words_that_work }),
+        h("p", { class: "small muted", text: "Words the model drew from your messages or from what " + name + " has said; check them against what you know." })) : null], look),
+    evidenceList("What is working", g.what_is_working, (w) => h("p", { text: w.what }), look),
+    evidenceList("What " + name + " has asked for", g.what_they_have_asked_for, (a) => [h("h4", { text: a.ask }), h("p", { class: "small muted", text: a.how_often })], look),
+    evidenceList("Patterns, and what research says about them", g.patterns, (p) => [h("h4", {}, p.name, " ", p.idea ? h("span", { class: "tag", text: p.idea }) : null, p.strength ? strength(p.strength) : null),
+      h("p", { text: p.what_happens }), h("p", { class: "small" }, h("strong", { text: "What it costs: " }), p.cost)], look),
+    evidenceList("What to stop", g.what_to_stop, (s) => [h("h4", { text: s.what }), h("p", { text: s.why })], look),
+    g.to_talk_about.length ? h("div", { class: "panel" }, h("h3", { text: "To talk about together" }),
+      h("p", { class: "small muted", text: "For a date night or the weekly check-in." }), h("ul", {}, g.to_talk_about.map((q) => h("li", { text: q })))) : null,
+    h("div", { class: "panel" }, h("h3", { text: "When this needs more than a plan" }), h("p", { text: g.get_help_if })),
+    h("div", { class: "panel" }, h("h3", { text: "The research behind it" }),
+      definition("The plan may draw only on these ideas. \"Well-established\" means many studies by different groups; \"supported\" means mainly one research programme or fewer studies; \"expert practice\" means used by counsellors but little tested directly."),
+      h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Idea" }), h("th", { text: "What it is" }), h("th", { text: "Evidence" }))),
+        h("tbody", {}, d.research.map((r) => h("tr", {}, h("td", { text: r.name }), h("td", { class: "small", text: r.what }), h("td", {}, strength(r.strength)))))))),
+    h("div", { class: "panel" }, h("h3", { text: "What the messages cannot show" }), h("p", { text: g.what_messages_cannot_show }), h("div", { class: "spacer" }),
+      h("button", { class: "quiet", text: "Throw this plan away so it can be written again", onclick: async () => {
+        if (!window.confirm("Throw away the plan and its lines for your memory file? Writing it again costs again.")) return;
+        await post("/api/plans/forget", { what: "partner", label: name });
+        renderPartner();
+      } })));
+}
+
+/* ---------- The monthly check: counted on this Mac, for free ---------- */
+
+function measureValue(key, value) {
+  if (value === null || value === undefined) return "–";
+  if (key === "started_by_me" || key === "tapback_share") return Math.round(value) + "%";
+  if (key === "reply_minutes") return value + " min";
+  return value + " per 100";
+}
+
+function measureChange(m, base, recent) {
+  if (base === null || recent === null || base === undefined || recent === undefined || !m.better) return null;
+  const change = base ? (recent - base) / base : (recent ? 1 : 0);
+  if (Math.abs(change) < 0.1) return h("span", { class: "tag medium", text: "about the same" });
+  const good = (change > 0) === (m.better === "up");
+  return h("span", { class: "tag " + (good ? "high" : "low"), text: (good ? "better" : "worse") + " than the starting point" });
+}
+
+function monthBars(d, m) {
+  const values = d.months.map((row) => row[m.key]).filter((v) => v !== null && v !== undefined);
+  const base = d.baseline.values[m.key];
+  const most = Math.max(...values, base || 0, 0.001);
+  const chart = h("div", { class: "mini-chart", role: "img", "aria-label": m.label + " by month; the dashed line is the starting point, " + measureValue(m.key, base) });
+  for (const row of d.months) {
+    const value = row[m.key];
+    const bar = h("div", { class: "mini-bar" + (row.month >= d.baseline.from && row.month <= d.baseline.to ? " base" : "") + (d.recent.from && row.month >= d.recent.from ? " recent" : "") });
+    bar.style.height = value === null || value === undefined ? "0" : Math.max(1.5, 100 * value / most) + "%";
+    chart.append(hoverTip(h("div", { class: "mini-slot" }, bar), row.month + ": " + measureValue(m.key, value) + " (" + fmt(row.my_messages) + " of your messages)"));
+  }
+  if (base !== null && base !== undefined) {
+    const line = h("div", { class: "mini-base" });
+    line.style.bottom = (100 * base / most) + "%";
+    chart.append(line);
+  }
+  return h("div", { class: "mini-cell" },
+    h("h4", {}, m.label, " ", d.recent.from ? measureChange(m, base, d.recent.values[m.key]) : null),
+    h("p", { class: "small muted", text: (d.recent.from ? (d.recent.from === d.recent.to ? d.recent.from : d.recent.from + " to " + d.recent.to) + ": " + measureValue(m.key, d.recent.values[m.key]) + ". "
+      : "No finished month since the plan yet. ") + "Starting point: " + measureValue(m.key, base) + "." }),
+    chart, h("div", { class: "mini-axis" }, h("span", { text: d.months[0].month }), h("span", { text: d.months[d.months.length - 1].month })),
+    h("p", { class: "small muted", text: m.what + "." }));
+}
+
+function monthReading(entry, rerender) {
+  const g = entry.body;
+  const tagFor = { "turned toward": "high", "missed": "medium", "turned away": "low", "listened": "high", "both": "medium", "fixed": "low",
+    "done": "high", "partly": "medium", "not seen": "low", "cannot tell": "" };
+  return h("div", { class: "panel" }, h("h3", { text: "Read: " + entry.month }), h("p", { text: g.in_brief }),
+    g.bids.length ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Date" }), h("th", { text: "They reached out" }), h("th", { text: "Your reply" }), h("th", { text: "" }))),
+      h("tbody", {}, g.bids.map((b) => h("tr", {}, h("td", { text: b.date }), h("td", { text: b.what_they_said }),
+        h("td", {}, b.my_reply || h("span", { class: "muted", text: "no reply" }), b.my_reply && !b.found ? h("span", { class: "tag low", text: "not found word for word" }) : null),
+        h("td", {}, h("span", { class: "tag " + (tagFor[b.response] || ""), text: b.response }))))))) : null,
+    g.listening.length ? [h("h4", { text: "Listening or fixing" }), g.listening.map((l) => h("div", { class: "claim" },
+      h("p", {}, h("strong", { text: l.date + ": " }), l.what_was_shared, " ", h("span", { class: "tag " + (tagFor[l.what_i_did] || ""), text: l.what_i_did })),
+      l.better ? h("p", { class: "small", text: "Better: " + l.better }) : null))] : null,
+    g.actions.length ? [h("h4", { text: "The first-month actions" }), g.actions.map((a) => h("div", { class: "claim" },
+      h("p", {}, h("strong", { text: a.action }), " ", h("span", { class: "tag " + (tagFor[a.seen] || ""), text: a.seen })), h("p", { class: "small", text: a.what_shows_it })))] : null,
+    h("p", {}, h("strong", { text: "One thing for next month: " }), g.one_thing),
+    h("button", { class: "quiet small", text: "Throw this reading away", onclick: async () => {
+      if (!window.confirm("Throw away the reading of " + entry.month + "? Reading it again costs again.")) return;
+      await post("/api/plans/forget", { what: "month", label: entry.month });
+      rerender();
+    } }));
+}
+
+async function renderMonthly() {
+  loading();
+  const st = await request("/api/plans/status");
+  planRefresh(st, "monthly", renderMonthly);
+  const d = await request("/api/plans/measures");
+  if (!d.partner || !d.months.length) {
+    show(h("div", { class: "panel" }, h("h2", { text: "Monthly check" }),
+      h("p", { text: d.partner ? "There are no messages with " + d.partner + " to count." : "Choose who the plan is about first, on Partner." }),
+      h("button", { class: "primary", text: "Go to Partner", onclick: () => setTab("partner") })));
+    return;
+  }
+  const shown = d.measures.filter((m) => m.label);
+  const phrases = d.measures.find((m) => m.key === "_phrases");
+  const months = await request("/api/plans/months");
+  const done = new Set(months.read.map((m) => m.month));
+  const choices = months.can_read.filter((m) => !done.has(m));
+  if (!choices.includes(planView.month)) planView.month = choices[0] || "";
+  const pick = h("select", { "aria-label": "Month to read" }, choices.map((m) => h("option", { value: m, text: m })));
+  pick.value = planView.month;
+  pick.addEventListener("change", () => { planView.month = pick.value; renderMonthly(); });
+  const hasPlan = Boolean(d.plan_written_at);
+  show(planProgress(st, renderMonthly),
+    h("div", { class: "panel" }, h("h2", { text: "Monthly check: you and " + d.partner }),
+      definition("Counted on this Mac from your messages with " + d.partner + ", at no cost: nothing is sent anywhere. Only finished months count. The starting point is the twelve months " +
+        (hasPlan ? "before the plan was written" : "before the latest three") + (d.baseline.from ? " (" + d.baseline.from + " to " + d.baseline.to + ")" : "") +
+        ", shown as the dashed line, with those months in a lighter shade. It is compared with " + (hasPlan ? "the finished months since the plan, the latest three at most" : "the latest three months") +
+        ", in the darkest shade. A single month is noisy, so read the direction over several. Click Update messages at the top first. " + (phrases ? phrases.what : "")),
+      hasPlan ? (d.recent.from ? null : h("p", { class: "small muted", text: "The plan was written on " + d.plan_written_at.slice(0, 10) + ". The first comparison appears once a month has finished since then." }))
+        : h("p", { class: "small muted", text: "Once the plan is written, the starting point is fixed at the twelve months before it, so later months show whether things are moving." })),
+    h("div", { class: "panel" }, h("div", { class: "mini-grid" }, shown.map((m) => monthBars(d, m)))),
+    h("div", { class: "panel" }, h("h3", { text: "The same numbers as a table" }),
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { text: "Month" }), h("th", { class: "n", text: "Your messages" }), shown.map((m) => h("th", { class: "n", text: m.label })))),
+        h("tbody", {}, h("tr", { class: "strong" }, h("td", { text: "Starting point" }), h("td", { class: "n", text: "" }), shown.map((m) => h("td", { class: "n", text: measureValue(m.key, d.baseline.values[m.key]) }))),
+          d.months.slice().reverse().map((row) => h("tr", {}, h("td", { text: row.month }), h("td", { class: "n", text: fmt(row.my_messages) }),
+            shown.map((m) => h("td", { class: "n", text: measureValue(m.key, row[m.key]) })))))))),
+    h("div", { class: "panel" }, h("h3", { text: "Have Claude read a month against the plan" }),
+      h("p", { text: "Optional. Claude reads one month of your messages with " + d.partner + " and says when they reached out and how you answered, when you listened and when you jumped to fixing, and whether the plan's first-month actions show up. Usually well under a dollar." }),
+      !hasPlan ? h("p", { class: "muted", text: "Write the plan first: a month is read against it." })
+        : choices.length ? [h("div", { class: "row" }, h("label", { class: "small" }, "Month ", pick)), planView.month && !(st.active || st.being_written) ? await planOffer("month", planView.month, "Read " + planView.month, renderMonthly) : null]
+          : h("p", { class: "muted", text: "Every finished month has been read." })),
+    months.read.map((entry) => monthReading(entry, renderMonthly)));
+}
+
+/* ---------- The next decade: your goals against what the messages show ---------- */
+
+async function renderDecade() {
+  loading();
+  const st = await request("/api/plans/status");
+  if (!st.key.key_found) { show(keyPanel(renderDecade)); return; }
+  planRefresh(st, "decade", renderDecade);
+  const d = await request("/api/plans/read?what=decade");
+  if (!d.body) {
+    show(planProgress(st, renderDecade),
+      h("div", { class: "panel" }, h("h2", { text: "The next decade: a reality check" }),
+        h("p", { text: "Not a new plan: the goals you already have, set against what your messages show. For each goal: whether the evidence supports it, contradicts it, or cannot see it. Then which goals look most at risk, where they pull against each other, the patterns that could undo them, a few milestones, and at most three moves for the first ninety days." }),
+        !(st.active || st.being_written) ? await planOffer("decade", "", "Write the reality check", renderDecade) : null));
+    return;
+  }
+  const g = d.body;
+  const evidenceTag = { supports: "high", mixed: "medium", contradicts: "low", "cannot see": "" };
+  show(planProgress(st, renderDecade),
+    h("div", { class: "panel" }, h("h2", { text: "The next decade: a reality check" }), h("p", { class: "lead", text: g.in_brief }),
+      h("p", { class: "small muted", text: "Written by " + d.written_by + " on " + d.written_at + " from your goals, your portrait, the notes on each year and the relationship histories. Health, money and work are mostly invisible in text messages." })),
+    h("div", { class: "panel" }, h("h3", { text: "The first ninety days" }),
+      h("div", { class: "action-grid" }, g.first_90_days.map((a, i) => h("div", { class: "action-card" }, h("div", { class: "action-number", text: String(i + 1) }),
+        h("h4", { text: a.move }), h("p", {}, h("strong", { text: "When: " }), a.when), h("p", {}, h("strong", { text: "Why: " }), a.why))))),
+    h("div", { class: "panel" }, h("h3", { text: "Your goals, against the evidence" }),
+      h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", { text: "Goal" }), h("th", { text: "Area" }), h("th", { text: "The messages" }), h("th", { text: "What they show" }))),
+        h("tbody", {}, g.goals.map((goal) => h("tr", {}, h("td", {}, goal.goal, goal.at_risk ? h("span", { class: "tag low", text: "at risk" }) : null),
+          h("td", { class: "small", text: goal.area }), h("td", {}, h("span", { class: "tag " + (evidenceTag[goal.evidence] || ""), text: goal.evidence })),
+          h("td", { class: "small", text: goal.what_messages_show }))))))),
+    evidenceList("Most at risk", g.most_at_risk, (r) => [h("h4", { text: r.goal }), h("p", { text: r.why })]),
+    evidenceList("Where goals pull against each other", g.tensions, (t) => [h("h4", { text: t.between }), h("p", { text: t.how_to_hold })]),
+    evidenceList("Patterns to watch", g.patterns_to_watch, (p) => [h("h4", { text: p.pattern }), h("p", { text: p.how_it_shows }),
+      h("p", { class: "small" }, h("strong", { text: "Early warning: " }), p.early_warning)]),
+    g.milestones.length ? h("div", { class: "panel" }, h("h3", { text: "Milestones" }),
+      h("ol", { class: "milestones" }, g.milestones.map((m) => h("li", {}, h("strong", { text: m.when }), " ", m.what)))) : null,
+    h("div", { class: "panel" }, h("h3", { text: "What the messages cannot show" }), h("p", { text: g.what_messages_cannot_show }), h("div", { class: "spacer" }),
+      h("button", { class: "quiet", text: "Throw this away so it can be written again", onclick: async () => {
+        if (!window.confirm("Throw away the reality check and its lines for your memory file? Writing it again costs again.")) return;
+        await post("/api/plans/forget", { what: "decade" });
+        renderDecade();
+      } })));
+}
+
+/* ---------- Your goals, in your own words ---------- */
+
+async function renderGoals() {
+  loading();
+  const d = await request("/api/plans/goals");
+  const box = h("textarea", { rows: "22", class: "goals-text", "aria-label": "Your goals and notes" });
+  box.value = d.text;
+  const count = h("span", { class: "small muted" });
+  const tally = () => { count.textContent = fmt(box.value.length) + " of " + fmt(d.most) + " characters"; };
+  box.addEventListener("input", tally);
+  tally();
+  const out = h("span", { class: "small muted", text: d.saved_at ? "Saved " + d.saved_at + "." : "" });
+  const save = async (button) => {
+    button.disabled = true;
+    try { const saved = await post("/api/plans/goals/save", { text: box.value }); out.textContent = "Saved " + saved.saved_at + "."; out.className = "small muted"; }
+    catch (error) { out.textContent = error.message; out.className = "small error"; }
+    button.disabled = false;
+  };
+  show(h("div", { class: "panel" }, h("h2", { text: "Your goals, in your own words" }),
+    h("p", { text: "Paste what you want the plans to know: your goals for the next decade, where you stand now, the routines you already keep, what you have tried, and what the messages cannot know about your health, work and life. The plans set what your messages show against this." }),
+    h("div", { class: "notice", text: "This text stays on this Mac. It is sent to Anthropic only inside a plan request, after you have seen the preview and confirmed. Leave out anything you would not want read by an AI service, such as account numbers, test results or anything confidential to an employer." }),
+    box, h("div", { class: "row" }, h("button", { class: "primary", text: "Save", onclick: (event) => save(event.currentTarget) }), count, out)));
 }
 
 /* Ready-made questions for the Ask AI screen. */
@@ -2085,6 +2380,7 @@ Object.assign(SCREENS, {
   ask: renderAsk, connect: renderConnect, pilot: renderPilot, review: () => renderReview(), hidden: renderHidden,
   full: renderFull, digests: renderDigests, histories: renderHistories, accuracy: renderAccuracy,
   me: renderMe, traits: renderTraits, mecharts: renderMeCharts, brain: renderBrain,
+  partner: renderPartner, monthly: renderMonthly, decade: renderDecade, goals: renderGoals,
 });
 
 start();

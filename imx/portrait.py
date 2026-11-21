@@ -268,6 +268,12 @@ CREATE TABLE IF NOT EXISTS brain_line (
 def _store() -> sqlite3.Connection:
     conn = jobs.store()
     conn.executescript(STORE_SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(brain_line)")}
+    if "source" not in columns:
+        # Added in 0.9.0: lines from the plans sit beside the portrait's, are marked private, and are thrown away separately.
+        conn.execute("ALTER TABLE brain_line ADD COLUMN source TEXT NOT NULL DEFAULT 'portrait'")
+        conn.execute("ALTER TABLE brain_line ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
     return conn
 
 
@@ -537,7 +543,7 @@ def brain_lines_exist() -> bool:
     with reading._store_lock:
         conn = _store()
         try:
-            return conn.execute("SELECT 1 FROM brain_line LIMIT 1").fetchone() is not None
+            return conn.execute("SELECT 1 FROM brain_line WHERE source = 'portrait' LIMIT 1").fetchone() is not None
         finally:
             conn.close()
 
@@ -551,7 +557,9 @@ def _fit(value: object, schema: dict) -> object:
         value = value if isinstance(value, str) else ""
         return value if "enum" not in schema or value in schema["enum"] else ""      # an unknown choice is dropped, not guessed
     if kind == "integer":
-        return int(value) if isinstance(value, (int, float)) else 0
+        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+    if kind == "boolean":
+        return value if isinstance(value, bool) else False
     if kind == "array":
         return [_fit(item, schema["items"]) for item in (value if isinstance(value, list) else [])]
     value = value if isinstance(value, dict) else {}
@@ -629,7 +637,7 @@ def _handle(custom_id: str, note: dict, reply: Optional[Dict[str, object]], prob
         with reading._store_lock:
             conn = _store()
             try:
-                conn.execute("DELETE FROM brain_line")
+                conn.execute("DELETE FROM brain_line WHERE source = 'portrait'")
                 for line in body["about_me"]:
                     if line["text"].strip():
                         conn.execute("INSERT INTO brain_line (section, kind, text, original, at) VALUES ('About me', ?, ?, ?, ?)",
@@ -757,7 +765,7 @@ def status() -> Dict[str, object]:
 def forget(everything: bool = False) -> Dict[str, object]:
     """Throw away the portrait and the brain lines so they can be written again. With `everything`, the notes too."""
     reading._write("DELETE FROM portrait", ())
-    reading._write("DELETE FROM brain_line", ())
+    reading._write("DELETE FROM brain_line WHERE source = 'portrait'", ())
     reading._write("DELETE FROM job_item WHERE kind = ? AND custom_id IN ('pp', 'pb') AND (batch_id IS NULL OR batch_id = '')", (KIND,))
     if everything:
         reading._write("DELETE FROM portrait_note", ())
@@ -796,15 +804,16 @@ def brain_lines() -> Dict[str, object]:
     with reading._store_lock:
         conn = _store()
         try:
-            rows = [dict(row) for row in conn.execute("SELECT id, section, kind, text, original, confirmed FROM brain_line ORDER BY id")]
+            rows = [dict(row) for row in conn.execute("SELECT id, section, kind, text, original, confirmed, private FROM brain_line ORDER BY private, id")]
         finally:
             conn.close()
     sections: Dict[str, List[dict]] = {}
     for row in rows:
         row["confirmed"] = bool(row["confirmed"])
+        row["private"] = bool(row["private"])
         row["edited"] = row["text"] != row["original"]
         sections.setdefault(row["section"], []).append(row)
-    return {"sections": [{"name": name, "lines": lines} for name, lines in sections.items()],
+    return {"sections": [{"name": name, "lines": lines, "private": any(line["private"] for line in lines)} for name, lines in sections.items()],
             "total": len(rows), "confirmed": sum(1 for row in rows if row["confirmed"])}
 
 
@@ -834,14 +843,16 @@ def brain_export() -> Dict[str, object]:
     """The lines you have ticked, as text to paste to whoever maintains your memory repository."""
     found = brain_lines()
     lines = ["BRAIN EXPORT from iMessage Explorer",
-             "Every line below was read and confirmed by me on %s. They are written in the first person." % datetime.now().strftime("%Y-%m-%d"),
-             ""]
+             "Every line below was read and confirmed by me on %s. They are written in the first person." % datetime.now().strftime("%Y-%m-%d")]
+    if any(section["private"] for section in found["sections"]):
+        lines.append("Sections marked [private] belong only in a private memory, never in anything shared.")
+    lines.append("")
     count = 0
     for section in found["sections"]:
         kept = [line for line in section["lines"] if line["confirmed"]]
         if not kept:
             continue
-        lines.append("== %s ==" % section["name"])
+        lines.append("== %s%s ==" % (section["name"], " [private]" if section["private"] else ""))
         for line in kept:
             lines.append("[%s] %s" % (line["kind"], line["text"]))
             count += 1

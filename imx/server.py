@@ -22,7 +22,7 @@ from typing import Callable, Dict, Tuple
 from urllib.parse import parse_qs, urlparse
 
 from . import (__version__, activity, ai, check, claude_api, extract, fullread, histories, index, insights, junk, labels, paths,
-               portrait, query, reading,
+               plans, portrait, query, reading,
                science, signals, stats, topics, update)
 from .query import Filters, QueryError
 
@@ -258,6 +258,12 @@ GET_ROUTES: Dict[str, Callable] = {
     "/api/me/charts": lambda conn, p: portrait.charts(p.get("name", ""), p.get("group") == "1"),
     "/api/me/brain": lambda conn, p: portrait.brain_lines(),
     "/api/me/brain/export": lambda conn, p: portrait.brain_export(),
+    "/api/plans/status": lambda conn, p: plans.status(),
+    "/api/plans/plan": lambda conn, p: _without(plans.plan(conn, p.get("what", ""), p.get("month", "")), "_item"),
+    "/api/plans/read": lambda conn, p: plans.read(p.get("what", ""), p.get("label", "")),
+    "/api/plans/goals": lambda conn, p: plans.goals(),
+    "/api/plans/measures": lambda conn, p: plans.measures(conn),
+    "/api/plans/months": lambda conn, p: {"read": plans.months_read(), "can_read": plans.finished_months(conn)},
     "/api/check/plan": lambda conn, p: _without(check.plan(conn, int(p.get("size") or check.SAMPLE)), "_items"),
     "/api/check/status": lambda conn, p: check.status(),
     "/api/check/summary": lambda conn, p: check.summary(),
@@ -371,6 +377,11 @@ def _confirmed(body: dict) -> None:
         raise QueryError("Confirm the preview before sending anything to the AI.")
 
 
+def _plan_start(conn, body) -> dict:
+    _confirmed(body)
+    return plans.start(conn, str(body.get("what") or ""), str(body.get("month") or ""))
+
+
 def _portrait_start(conn, body) -> dict:
     _confirmed(body)
     return portrait.start(conn)
@@ -415,6 +426,11 @@ POST_ROUTES: Dict[str, Callable] = {
     "/api/junk/change": _junk_change,
     "/api/me/start": _portrait_start,
     "/api/me/stop": lambda conn, b: portrait.stop(),
+    "/api/plans/start": _plan_start,
+    "/api/plans/stop": lambda conn, b: plans.stop(),
+    "/api/plans/forget": lambda conn, b: plans.forget(str(b.get("what") or ""), str(b.get("label") or "")),
+    "/api/plans/goals/save": lambda conn, b: plans.save_goals(b.get("text") if isinstance(b.get("text"), str) else ""),
+    "/api/plans/partner": lambda conn, b: plans.set_partner(str(b.get("name") or "")),
     "/api/me/forget": lambda conn, b: portrait.forget(bool(b.get("everything"))),
     "/api/me/brain/save": _save_brain_line,
     "/api/check/start": _check_start,
@@ -462,7 +478,7 @@ def serve(port: int = 8765, open_browser: bool = True) -> str:
     print("Leave this window open while you use it. To stop, use Quit on the Setup screen or close this window.")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    for job in (fullread, check, histories, portrait):
+    for job in (fullread, check, histories, portrait, plans):
         job.resume_if_needed()       # carry on with anything that was under way when the app was last closed
     try:
         httpd.serve_forever()

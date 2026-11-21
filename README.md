@@ -43,7 +43,7 @@ Eight sections across the top. Explanations of how each number is worked out sit
 | Section | What is there |
 |---|---|
 | **Home** | Your inner circle, what has changed lately, and where to go next |
-| **Me** | A portrait of you drawn from everything read so far, ten trait scores as spider charts (overall and per person), charts of how your conversations felt over time, and lines for your memory file |
+| **Me** | A portrait of you drawn from everything read so far, ten trait scores as spider charts (overall and per person), charts of how your conversations felt over time, a plan for you and your partner with a free monthly check, a reality check of your goals for the next decade, and lines for your memory file |
 | **People** | Your people ranked, with labels and pins; circles of 5, 15, 50 and 150; a profile page for anyone; every conversation by volume; the automated senders that were set aside |
 | **Search** | Find messages by words, phrases and filters; saved topics |
 | **Patterns** | Over time, replies and read times, reactions, tone, words and phrases, expressions and style, "we" against "I", and what gets shared |
@@ -143,6 +143,17 @@ Everything read so far, turned towards one question: who are you, as your messag
 - **For your memory file.** Short first-person statements about you and each key relationship, for an assistant's long-term memory. You read each one, edit it until it is true, and tick it. Only ticked lines are ever copied, and the app sends them nowhere: you paste them where you want them. A memory file is read by every assistant connected to it, so tick a line about another person only if you are content for those services to hold it.
 - **What it cannot know.** It is three steps from the messages and can only describe what was texted.
 - **The caps.** $80 for the portrait, and $300 for the whole project across every kind of reading.
+
+### Plans: a few things to do
+
+Three more screens in the **Me** section turn what was read into action. All three are written for you alone.
+
+- **Your goals.** Paste your own goals and notes: what you want from the next decade, where you stand now, the routines you already keep. It stays on your Mac and is sent only inside a plan request, after a preview you confirm.
+- **Partner.** Choose the person (they need a relationship history). Claude Opus reads your history together, every stretch with friction that fits, the most recent of the rest, your portrait, your goals and the monthly counts. It matches what relationship research says matters to what your messages show, and names each research idea with how firm its evidence is: well-established (many studies by different groups), supported (mainly one research programme), or expert practice (used by counsellors, little tested). You get what is working, what your partner has asked for, the patterns that matter, **at most three things to do in the first month**, each tied to a time or a routine, what to try in the moments that keep coming back, what to stop, questions to talk about together, and when this needs a counsellor rather than a plan. Every point cites the conversations behind it.
+- **Monthly check.** Counted on your Mac, free: who starts conversations, how many of your replies are only a tapback, thanks and praise, affection, long messages, and how fast you reply. Only finished months count. The starting point is the twelve months before the plan was written, and each finished month since is set against it. Counting phrases is rough, and a single month is noisy: read the direction over several. Optionally, Claude reads one month of messages against the plan (usually well under a dollar): when your partner reached out and how you answered, when you listened and when you jumped to fixing, and whether the first-month actions show up.
+- **Next decade.** Not a new plan: your goals, set against what your messages show. Each goal is marked as supported, contradicted, mixed, or not visible in texts (health, money and most of work are not). Then what looks most at risk, where goals pull against each other, patterns to watch with their early warning signs, milestones, and at most three moves for the first ninety days.
+- **Lines for your memory file** from the plans are marked private, on the page and in the copied text.
+- **The cap.** $25 for plans, inside the $300 cap on the whole project.
 
 ### Histories
 
