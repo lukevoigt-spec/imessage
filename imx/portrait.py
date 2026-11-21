@@ -844,7 +844,7 @@ def brain_export() -> Dict[str, object]:
     found = brain_lines()
     lines = ["BRAIN EXPORT from iMessage Explorer",
              "Every line below was read and confirmed by me on %s. They are written in the first person." % datetime.now().strftime("%Y-%m-%d")]
-    if any(section["private"] for section in found["sections"]):
+    if any(line["private"] and line["confirmed"] for section in found["sections"] for line in section["lines"]):
         lines.append("Sections marked [private] belong only in a private memory, never in anything shared.")
     lines.append("")
     count = 0

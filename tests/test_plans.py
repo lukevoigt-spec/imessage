@@ -149,6 +149,12 @@ class PartnerPlanTests(PlanBase):
         self.write_histories()
         self.write_portrait()
         portrait_lines = portrait.brain_lines()["total"]
+        first = portrait.brain_lines()["sections"][0]["lines"][0]
+        portrait.save_brain_line(first["id"], confirmed=True)
+        plans.start(self.conn, "partner")
+        self.finish(plans.runner)
+        self.assertNotIn("[private]", portrait.brain_export()["text"])                 # nothing private ticked: no private note
+        plans.forget("partner")
         plans.start(self.conn, "partner")
         self.finish(plans.runner)
         found = portrait.brain_lines()
