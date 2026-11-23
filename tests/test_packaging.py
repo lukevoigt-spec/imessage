@@ -61,9 +61,14 @@ class PackagingTests(unittest.TestCase):
             self.assertTrue(lines[0].startswith("100755"), "%s would not be runnable after download" % name)
 
     def test_nothing_personal_is_published(self):
-        """The code is published openly. Planning notes are kept elsewhere and must not come back in."""
-        for name in ("DONE.md", "docs"):
-            self.assertFalse((ROOT / name).exists(), "%s is private and must not be in the published project" % name)
+        """The code is published openly. Planning notes are kept elsewhere and must not come back in.
+        docs/ holds only the public sign-in relay pages that GitHub Pages serves for Brain Explorer."""
+        self.assertFalse((ROOT / "DONE.md").exists(), "DONE.md is private and must not be in the published project")
+        docs = ROOT / "docs"
+        if docs.exists():
+            found = sorted(p.name for p in docs.iterdir())
+            self.assertEqual(found, sorted(set(found) & {"withings.html", "whoop.html"}),
+                             "docs/ may hold only the sign-in relay pages; planning notes are private")
 
     def test_ignore_rules_do_not_hide_project_files(self):
         if _git("rev-parse", "--is-inside-work-tree").returncode != 0:
