@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Brain Explorer sign-in</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 -apple-system, system-ui, sans-serif; max-width: 34em; margin: 18vh auto; padding: 0 16px; }
+</style>
+</head>
+<body>
+<p id="msg">Passing the Withings sign-in to Brain Explorer on this Mac…</p>
+<script>
+  // Withings will only return to a public https address, so it returns here. This page holds
+  // nothing and stores nothing: it hands the one-time code straight to Brain Explorer, which
+  // runs on this computer at 127.0.0.1. The code is useless without the secret kept on the Mac.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var port = String(q.get('state') || '').split('.')[0];
+    if (!/^\d{2,5}$/.test(port)) {
+      document.getElementById('msg').textContent = 'This page is only used during the Withings sign-in from Brain Explorer.';
+      return;
+    }
+    location.replace('http://127.0.0.1:' + port + '/withings/callback' + location.search);
+  })();
+</script>
+</body>
+</html>
