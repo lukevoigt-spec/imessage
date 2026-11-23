@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Brain Explorer sign-in</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.5 -apple-system, system-ui, sans-serif; max-width: 34em; margin: 18vh auto; padding: 0 16px; }
+</style>
+</head>
+<body>
+<p id="msg">Passing the sign-in to Brain Explorer on this Mac…</p>
+<script>
+  // These services will only return to a public https address, so they return here. This page
+  // holds nothing and stores nothing: it hands the one-time code straight to Brain Explorer, which
+  // runs on this computer at 127.0.0.1. The code is useless without the secret kept on the Mac.
+  // The same file serves every service; its name (withings.html, whoop.html) says which.
+  (function () {
+    var service = location.pathname.split('/').pop().replace(/\.html$/, '');
+    var q = new URLSearchParams(location.search);
+    var port = String(q.get('state') || '').split('.')[0];
+    if (['withings', 'whoop'].indexOf(service) < 0 || !/^\d{2,5}$/.test(port)) {
+      document.getElementById('msg').textContent = 'This page is only used while signing in from Brain Explorer.';
+      return;
+    }
+    location.replace('http://127.0.0.1:' + port + '/' + service + '/callback' + location.search);
+  })();
+</script>
+</body>
+</html>
