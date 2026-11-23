@@ -11,19 +11,21 @@
 </style>
 </head>
 <body>
-<p id="msg">Passing the Withings sign-in to Brain Explorer on this Mac…</p>
+<p id="msg">Passing the sign-in to Brain Explorer on this Mac…</p>
 <script>
-  // Withings will only return to a public https address, so it returns here. This page holds
-  // nothing and stores nothing: it hands the one-time code straight to Brain Explorer, which
+  // These services will only return to a public https address, so they return here. This page
+  // holds nothing and stores nothing: it hands the one-time code straight to Brain Explorer, which
   // runs on this computer at 127.0.0.1. The code is useless without the secret kept on the Mac.
+  // The same file serves every service; its name (withings.html, whoop.html) says which.
   (function () {
+    var service = location.pathname.split('/').pop().replace(/\.html$/, '');
     var q = new URLSearchParams(location.search);
     var port = String(q.get('state') || '').split('.')[0];
-    if (!/^\d{2,5}$/.test(port)) {
-      document.getElementById('msg').textContent = 'This page is only used during the Withings sign-in from Brain Explorer.';
+    if (['withings', 'whoop'].indexOf(service) < 0 || !/^\d{2,5}$/.test(port)) {
+      document.getElementById('msg').textContent = 'This page is only used while signing in from Brain Explorer.';
       return;
     }
-    location.replace('http://127.0.0.1:' + port + '/withings/callback' + location.search);
+    location.replace('http://127.0.0.1:' + port + '/' + service + '/callback' + location.search);
   })();
 </script>
 </body>
